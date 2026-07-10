@@ -1,0 +1,51 @@
+# Gemini CLI Provider 配置
+provider: gemini_cli
+display_name: Gemini CLI
+description: Google Gemini 命令行工具
+version: "0.1.0"
+
+capabilities:
+  - general
+  - search
+  - coding
+
+task_types:
+  - search
+  - general
+  - coding
+
+priority: 80
+fallback:
+  - chatgpt
+
+quota:
+  type: unlimited
+  total: -1
+  remaining: -1
+  reset_at: null
+  auto_detect: false
+
+cost:
+  currency: null
+  amount: 0
+  unit: per_call
+
+health_check:
+  method: cli
+  command: "gemini --version"
+  expect_contains: "gemini"
+  timeout: 10
+
+auth_check:
+  method: cli
+  command: "gemini auth status"
+  expect_contains: "logged in"
+  timeout: 10
+
+executor:
+  type: cli
+  command_template: "gemini \"{task}\""
+  timeout: 300
+  workdir: null
+
+status: enabled

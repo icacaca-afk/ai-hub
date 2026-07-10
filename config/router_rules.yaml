@@ -1,0 +1,31 @@
+# Router 路由规则配置
+# 定义每种任务类型的 Provider 优先级链
+# Router 会按此顺序尝试，跳过不可用的 Provider
+
+rules:
+  - task_type: coding
+    providers:
+      - qoder        # priority: 100
+      - gemini_cli   # priority: 80
+      - chatgpt      # priority: 60
+
+  - task_type: analysis
+    providers:
+      - qclaw        # priority: 100
+      - gemini_cli   # priority: 80
+      - chatgpt      # priority: 60
+
+  - task_type: search
+    providers:
+      - gemini_cli   # priority: 100
+      - qclaw        # priority: 80
+
+  - task_type: file_ops
+    providers:
+      - qclaw        # priority: 100
+
+  - task_type: general
+    providers:
+      - gemini_cli   # priority: 100
+      - chatgpt      # priority: 80
+      - qclaw        # priority: 60

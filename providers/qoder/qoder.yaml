@@ -1,0 +1,50 @@
+# QODER Provider 配置
+provider: qoder
+display_name: QODER
+description: 阿里 Agentic 编程平台
+version: "0.1.0"
+
+capabilities:
+  - coding
+  - debug
+  - refactor
+
+task_types:
+  - coding
+
+priority: 100
+fallback:
+  - gemini_cli
+  - chatgpt
+
+quota:
+  type: daily
+  total: 80
+  remaining: 80
+  reset_at: null
+  auto_detect: false
+
+cost:
+  currency: null
+  amount: 0
+  unit: per_call
+
+health_check:
+  method: cli
+  command: "qoder --version"
+  expect_contains: "qoder"
+  timeout: 10
+
+auth_check:
+  method: cli
+  command: "qoder auth status"
+  expect_contains: "logged in"
+  timeout: 10
+
+executor:
+  type: cli
+  command_template: "qoder run \"{task}\""
+  timeout: 300
+  workdir: null
+
+status: enabled

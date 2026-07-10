@@ -1,0 +1,74 @@
+# 任务类型关键词映射
+# Router 通过关键词匹配判断任务类型
+# V0.3 将替换为 AI 分类
+
+coding:
+  - 写代码
+  - 写一个
+  - 实现
+  - 开发
+  - 重构
+  - 调试
+  - bug
+  - 函数
+  - 类
+  - api
+  - deploy
+  - 部署
+  - 脚本
+  - python
+  - javascript
+  - java
+  - html
+  - css
+  - sql
+  - code
+  - function
+  - class
+  - refactor
+
+analysis:
+  - 总结
+  - 分析
+  - 摘要
+  - 提取
+  - 读
+  - 看看
+  - review
+  - pdf
+  - 文档
+  - 报告
+  - summarize
+  - analyze
+
+search:
+  - 搜索
+  - 搜一下
+  - 查一下
+  - 查一查
+  - 查找
+  - 找一下
+  - search
+  - look up
+
+file_ops:
+  - 整理
+  - 移动
+  - 重命名
+  - 压缩
+  - 清理
+  - 文件
+  - file
+  - organize
+  - clean
+
+general:
+  - 翻译
+  - 写邮件
+  - 起名字
+  - 建议
+  - help
+  - 你好
+  - hello
+  - hi
+  - 问

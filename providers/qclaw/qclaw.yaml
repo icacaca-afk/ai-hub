@@ -1,0 +1,51 @@
+# QClaw Provider 配置
+provider: qclaw
+display_name: QClaw
+description: 腾讯 QClaw AI 助手
+version: "0.1.0"
+
+capabilities:
+  - analysis
+  - file_ops
+  - general
+
+task_types:
+  - analysis
+  - file_ops
+  - general
+
+priority: 90
+fallback:
+  - gemini_cli
+
+quota:
+  type: daily
+  total: 100
+  remaining: 100
+  reset_at: null
+  auto_detect: false
+
+cost:
+  currency: null
+  amount: 0
+  unit: per_call
+
+health_check:
+  method: cli
+  command: "openclaw status"
+  expect_contains: "running"
+  timeout: 10
+
+auth_check:
+  method: cli
+  command: "openclaw status"
+  expect_contains: "running"
+  timeout: 10
+
+executor:
+  type: openclaw
+  command_template: "openclaw ask \"{task}\""
+  timeout: 300
+  workdir: null
+
+status: enabled
