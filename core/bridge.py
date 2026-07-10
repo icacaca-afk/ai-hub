@@ -411,8 +411,10 @@ class APIBridge(Bridge):
 class FakeBridge(Bridge):
     """Fake 桥接器。
 
-    不调用任何外部服务，永远返回预设结果。
+    不调用任何外部服务，返回预设结果。
     用于：骨架验证、单元测试、Provider 开发调试。
+
+    支持 timeout / retry / artifacts 模拟，用于 Contract Test。
 
     API Stability: Stable
     """
@@ -422,18 +424,50 @@ class FakeBridge(Bridge):
         response: str = "Hello AI Hub!",
         available: bool = True,
         delay_ms: int = 0,
+        timeout_ms: int = 0,
+        fail_times: int = 0,
+        artifacts: list[str] | None = None,
     ):
         self.response = response
         self._available = available
         self.delay_ms = delay_ms
+        self.timeout_ms = timeout_ms
+        self.fail_times = fail_times
+        self.output_artifacts = artifacts or []
+        self._call_count = 0
 
     def run(self, task: Task, **kwargs) -> BridgeResult:
+        self._call_count += 1
+
+        # 模拟超时
+        timeout = kwargs.get("timeout", self.timeout_ms)
+        if timeout and timeout > 0:
+            if self.delay_ms > 0:
+                time.sleep(self.delay_ms / 1000)
+            return BridgeResult(
+                success=False,
+                output="",
+                error=f"Timeout after {timeout}s",
+                duration_ms=timeout * 1000,
+            )
+
         if self.delay_ms > 0:
             time.sleep(self.delay_ms / 1000)
+
+        # 模拟前 N 次失败（用于 retry 测试）
+        if self._call_count <= self.fail_times:
+            return BridgeResult(
+                success=False,
+                output="",
+                error=f"Simulated failure (attempt {self._call_count}/{self.fail_times})",
+                duration_ms=self.delay_ms,
+            )
+
         return BridgeResult(
             success=True,
             output=f"{self.response}\n\nYou said: {task.content}",
             duration_ms=self.delay_ms,
+            artifacts=list(self.output_artifacts) if self.output_artifacts else [],
         )
 
     def check_available(self) -> bool:
@@ -441,6 +475,15 @@ class FakeBridge(Bridge):
 
     def check_auth(self) -> bool:
         return self._available
+
+    @property
+    def call_count(self) -> int:
+        """已调用次数（用于 retry 测试断言）。"""
+        return self._call_count
+
+    def reset(self) -> None:
+        """重置调用计数（用于测试隔离）。"""
+        self._call_count = 0
 
 
 class GUIBridge(Bridge):

@@ -11,6 +11,8 @@
 #   ✓ select_bridge(task) 返回 Bridge
 #   ✓ 没有 execute() 方法
 #   ✓ supports() 正确
+#   ✓ estimate(task) 返回合法 dict
+#   ✓ timeout / retry 配置合法
 
 from __future__ import annotations
 
@@ -50,7 +52,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
     passed = True
 
     # 1. 检查 metadata
-    print("\n[1/8] Metadata")
+    print("\n[1/10] Metadata")
     metadata = getattr(provider_cls, "metadata", None)
     if not isinstance(metadata, ProviderMetadata):
         fail("metadata is not a ProviderMetadata instance")
@@ -85,7 +87,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
                 ok(f"capability: {cap}")
 
     # 2. 检查 bridge
-    print("\n[2/8] Bridge")
+    print("\n[2/10] Bridge")
     bridge = getattr(provider_cls, "bridge", None)
     if not isinstance(bridge, Bridge):
         fail("bridge is not a Bridge instance")
@@ -93,7 +95,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
     ok(f"bridge = {type(bridge).__name__}")
 
     # 3. 实例化
-    print("\n[3/8] Instantiation")
+    print("\n[3/10] Instantiation")
     try:
         provider = provider_cls()
         ok("instantiated successfully")
@@ -102,7 +104,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         return False
 
     # 4. 检查没有 execute()
-    print("\n[4/8] No execute() method")
+    print("\n[4/10] No execute() method")
     if hasattr(provider, "execute"):
         fail("Provider has execute() — should be removed. Execution is Router's responsibility.")
         passed = False
@@ -110,7 +112,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         ok("no execute() method (correct)")
 
     # 5. 检查 available()
-    print("\n[5/8] available()")
+    print("\n[5/10] available()")
     try:
         result = provider.available()
         if isinstance(result, bool):
@@ -123,7 +125,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         passed = False
 
     # 6. 检查 quota_left()
-    print("\n[6/8] quota_left()")
+    print("\n[6/10] quota_left()")
     try:
         quota = provider.quota_left()
         if isinstance(quota, int):
@@ -136,7 +138,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         passed = False
 
     # 7. 检查 select_bridge()
-    print("\n[7/8] select_bridge()")
+    print("\n[7/10] select_bridge()")
     try:
         task = Task.from_text("test task")
         br = provider.select_bridge(task)
@@ -150,7 +152,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         passed = False
 
     # 8. 检查 supports()
-    print("\n[8/8] supports()")
+    print("\n[8/10] supports()")
     try:
         for cap in metadata.capabilities:
             if not provider.supports(cap):
@@ -163,6 +165,50 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
             ok("supports() works correctly")
     except Exception as e:
         fail(f"supports() raised: {e}")
+        passed = False
+
+    # 9. 检查 estimate()
+    print("\n[9/10] estimate()")
+    try:
+        task = Task.from_text("test task")
+        est = provider.estimate(task)
+        if not isinstance(est, dict):
+            fail(f"estimate() returned {type(est).__name__}, expected dict")
+            passed = False
+        else:
+            required_keys = {"duration_ms_est", "cost", "retry_count", "retry_delay", "timeout"}
+            missing = required_keys - set(est.keys())
+            if missing:
+                fail(f"estimate() missing keys: {missing}")
+                passed = False
+            else:
+                ok(f"estimate() → {len(est)} keys")
+    except Exception as e:
+        fail(f"estimate() raised: {e}")
+        passed = False
+
+    # 10. 检查 timeout / retry 配置
+    print("\n[10/10] timeout / retry config")
+    try:
+        if not isinstance(metadata.timeout, int) or metadata.timeout <= 0:
+            fail(f"metadata.timeout = {metadata.timeout}, expected positive int")
+            passed = False
+        else:
+            ok(f"timeout = {metadata.timeout}s")
+
+        if not isinstance(metadata.retry_count, int) or metadata.retry_count < 0:
+            fail(f"metadata.retry_count = {metadata.retry_count}, expected non-negative int")
+            passed = False
+        else:
+            ok(f"retry_count = {metadata.retry_count}")
+
+        if not isinstance(metadata.retry_delay, (int, float)) or metadata.retry_delay < 0:
+            fail(f"metadata.retry_delay = {metadata.retry_delay}, expected non-negative number")
+            passed = False
+        else:
+            ok(f"retry_delay = {metadata.retry_delay}s")
+    except Exception as e:
+        fail(f"timeout/retry config check raised: {e}")
         passed = False
 
     # 结果

@@ -55,6 +55,11 @@ class ProviderMetadata:
     cost_amount: float = 0.0
     cost_unit: str = "per_call"
 
+    # 执行控制
+    timeout: int = 300                       # 单次执行超时（秒）
+    retry_count: int = 0                     # 失败重试次数（0 = 不重试）
+    retry_delay: float = 1.0                 # 重试间隔（秒）
+
 
 class Provider(ABC):
     """所有 AI 平台适配器的基类。
@@ -145,6 +150,33 @@ class Provider(ABC):
             "currency": self.metadata.cost_currency,
             "amount": self.metadata.cost_amount,
             "unit": self.metadata.cost_unit,
+        }
+
+    # ─── 任务估算 ───
+
+    def estimate(self, task: Task) -> dict[str, Any]:
+        """估算任务执行的成本和时间。
+
+        在实际执行前调用，用于路由决策和用户提示。
+        子类可覆盖以提供更精确的估算。
+
+        Args:
+            task: 任务对象
+
+        Returns:
+            估算信息字典，包含：
+            - duration_ms_est: 预估执行时间（毫秒）
+            - cost: 成本信息（同 cost() 返回）
+            - retry_count: 重试次数
+            - retry_delay: 重试间隔（秒）
+            - timeout: 超时时间（秒）
+        """
+        return {
+            "duration_ms_est": self.metadata.timeout * 1000,
+            "cost": self.cost(),
+            "retry_count": self.metadata.retry_count,
+            "retry_delay": self.metadata.retry_delay,
+            "timeout": self.metadata.timeout,
         }
 
     # ─── 工具方法 ───
