@@ -1,8 +1,25 @@
 # AI Hub
 
-> **One Task. Any AI. Any Runtime.**
+> One Task. One Capability. Any AI. Any Runtime.
 
 Route one task to the best AI provider automatically.
+
+## Philosophy
+
+```
+AI Hub does not unify AI models.
+AI Hub unifies execution.
+
+A task becomes a capability.
+A capability selects a provider.
+A provider selects a bridge.
+A bridge communicates with a runtime.
+```
+
+All design decisions follow from this. Interfaces may add fields, Bridges may
+add streaming, Providers may add health checks — but this chain never changes.
+
+---
 
 ```
 Task → Router → Capability → Registry → Provider → Bridge → Runtime → Result
