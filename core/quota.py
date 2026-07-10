@@ -44,6 +44,7 @@ class QuotaManager:
         self._init_db()
 
     def _init_db(self) -> None:
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS quota (
                 provider_name TEXT PRIMARY KEY,
@@ -114,8 +115,11 @@ class QuotaManager:
                 task_id: str = "") -> bool:
         """扣减额度。返回是否扣减成功。
 
+        事务保护：BEGIN IMMEDIATE → 读 → 检查 → 写 → COMMIT。
+        并发安全：原子 UPDATE … WHERE used + ? <= total 替代 SELECT-then-UPDATE。
+
         无限额度（total == -1）永远返回 True 但不写入日志。
-        额度不足返回 False。
+        额度不足（或不满足原子条件）返回 False。
         """
         row = self._row(provider_name)
         if row is None:
@@ -123,23 +127,34 @@ class QuotaManager:
         if row["total"] == -1:
             return True  # 无限额度
 
-        remaining_before = row["total"] - row["used"]
-        if remaining_before < amount:
-            return False
+        # BEGIN IMMEDIATE：阻止并发写，保证原子性
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            # 原子扣减：WHERE used + ? <= total 防止超扣
+            cursor = self.conn.execute(
+                "UPDATE quota SET used = used + ? "
+                "WHERE provider_name = ? AND used + ? <= total",
+                (amount, provider_name, amount),
+            )
+            if cursor.rowcount == 0:
+                self.conn.execute("ROLLBACK")
+                return False
 
-        self.conn.execute(
-            "UPDATE quota SET used = used + ? WHERE provider_name = ?",
-            (amount, provider_name),
-        )
-        # 记录日志
-        self.conn.execute(
-            "INSERT INTO quota_log (provider_name, amount, remaining, task_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (provider_name, amount, remaining_before - amount, task_id,
-             datetime.now().isoformat()),
-        )
-        self.conn.commit()
-        return True
+            # 读回最新值写日志
+            row2 = self._row(provider_name)
+            remaining_after = row2["total"] - row2["used"]
+
+            self.conn.execute(
+                "INSERT INTO quota_log (provider_name, amount, remaining, task_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (provider_name, amount, remaining_after, task_id,
+                 datetime.now().isoformat()),
+            )
+            self.conn.execute("COMMIT")
+            return True
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
 
     # ── 恢复（预留接口） ──
 
