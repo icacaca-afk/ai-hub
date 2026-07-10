@@ -23,7 +23,15 @@ from router.router import Router
 
 
 def _build_registry() -> CapabilityRegistry:
-    """构建 CapabilityRegistry。"""
+    """构建 CapabilityRegistry。
+
+    V0.1.1: 全量注册 5 个 Provider，验证 Zero-Modification KPI。
+    - demo       (FakeBridge)  — 基线
+    - gemini_cli (CLIBridge)   — V0.1 真实接入
+    - stub       (CLIBridge)   — V0.1.1 架构验证（同类型第二个）
+    - openai_api (APIBridge)   — V0.1 真实接入
+    - qoder      (CLIBridge)   — 注册但 CLI 不可用时自动降级
+    """
     registry = CapabilityRegistry()
 
     from providers.demo.provider import DemoProvider
@@ -32,11 +40,14 @@ def _build_registry() -> CapabilityRegistry:
     from providers.gemini.provider import GeminiCLIProvider
     registry.register(GeminiCLIProvider())
 
-    # TODO: V0.1 后续接入
-    # from providers.qoder.provider import QoderProvider
-    # registry.register(QoderProvider())
-    # from providers.openai_api.provider import OpenAIAPIProvider
-    # registry.register(OpenAIAPIProvider())
+    from providers.stub.provider import StubProvider
+    registry.register(StubProvider())
+
+    from providers.openai_api.provider import OpenAIAPIProvider
+    registry.register(OpenAIAPIProvider())
+
+    from providers.qoder.provider import QoderProvider
+    registry.register(QoderProvider())
 
     return registry
 
