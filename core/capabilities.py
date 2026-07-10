@@ -14,19 +14,24 @@ from __future__ import annotations
 # 采用命名空间格式：domain.action
 # 这样以后可以细分而不冲突，例如 code.generate / code.review / code.debug
 CAPABILITIES = {
-    "code.generate":    "生成代码",
-    "code.debug":       "调试代码",
-    "code.refactor":    "重构代码",
-    "code.review":      "代码审查",
-    "text.summarize":   "总结文本",
-    "text.analyze":     "分析文本",
-    "text.translate":   "翻译文本",
-    "text.generate":    "生成文本",
-    "search.web":       "搜索网络",
-    "search.local":     "本地搜索",
-    "file.organize":    "整理文件",
-    "file.transform":   "文件转换",
-    "general.chat":     "通用对话",
+    "code.generate":      "生成代码",
+    "code.debug":         "调试代码",
+    "code.refactor":      "重构代码",
+    "code.review":        "代码审查",
+    "text.summarize":     "总结文本",
+    "text.analyze":       "分析文本",
+    "text.translate":     "翻译文本",
+    "text.generate":      "生成文本",
+    "search.web":         "搜索网络",
+    "search.local":       "本地搜索",
+    "file.organize":      "整理文件",
+    "file.transform":     "文件转换",
+    "general.chat":       "通用对话",
+    "browser.navigate":   "浏览器导航",
+    "browser.scrape":     "网页抓取",
+    "browser.screenshot": "网页截图",
+    "browser.interact":   "浏览器交互",
+    "gui.automate":       "GUI自动化",
 }
 
 
@@ -87,6 +92,16 @@ KEYWORD_TO_CAPABILITY: dict[str, list[str]] = {
     "文件":        ["file.organize"],
     "organize":    ["file.organize"],
     "clean":       ["file.organize"],
+
+    # browser
+    "打开网页":    ["browser.navigate"],
+    "打开网站":    ["browser.navigate"],
+    "截图":        ["browser.screenshot"],
+    "网页截图":    ["browser.screenshot"],
+    "抓取网页":    ["browser.scrape"],
+    "browser":     ["browser.navigate", "browser.interact"],
+    "navigate":   ["browser.navigate"],
+    "scrape":     ["browser.scrape"],
 
     # general
     "翻译":        ["text.translate"],

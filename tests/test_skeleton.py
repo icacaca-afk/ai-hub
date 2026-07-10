@@ -122,19 +122,19 @@ def test_bridges():
     ab = APIBridge(endpoint="https://example.com", api_key_env="FAKE_KEY")
     assert ab.check_available() is False
 
-    # GUIBridge（预留）
+    # GUIBridge（pyautogui 可能未安装）
     gb = GUIBridge(app_name="Marvis")
-    assert gb.check_available() is False
+    assert isinstance(gb.check_available(), bool)
     gr = gb.run(task)
     assert gr.success is False
-    assert "not yet implemented" in gr.error
+    assert gr.error is not None
 
-    # BrowserBridge（预留）
+    # BrowserBridge（Playwright 可能未安装）
     bb = BrowserBridge(url="https://claude.ai")
-    assert bb.check_available() is False
+    assert isinstance(bb.check_available(), bool)
     br = bb.run(task)
     assert br.success is False
-    assert "not yet implemented" in br.error
+    assert br.error is not None
 
     print("✅ test_bridges passed")
 

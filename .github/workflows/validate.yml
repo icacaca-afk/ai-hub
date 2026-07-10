@@ -19,5 +19,7 @@ jobs:
         run: python tests/test_skeleton.py
       - name: Run provider contract tests
         run: python tests/test_provider_contract.py
+      - name: Run runtime tests
+        run: python tests/test_runtime.py
       - name: Validate providers
         run: python tests/validate_provider.py

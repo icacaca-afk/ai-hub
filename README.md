@@ -1,6 +1,6 @@
 # AI Hub
 
-> One Task. One Capability. Any AI. Any Runtime.
+> One Task. Any AI. Any Runtime.
 
 ## Architecture Validation
 
@@ -158,13 +158,95 @@ python tests/validate_provider.py
 │  Provider  │  metadata（声明能力）+ select_bridge(task) → Bridge
 └──────┬─────┘  【不实现 execute()】
        ▼
-┌────────────┐
-│   Bridge   │  通信层（CLI / API / GUI / Browser）
-└──────┬─────┘
+┌────────────┐     ┌──────────────────┐
+│   Bridge   │ ←──│ RuntimeRegistry   │  Runtime → Bridge 类型映射
+└──────┬─────┘     └──────────────────┘
        ▼
 ┌────────────┐
-│  Runtime   │  CLI 进程 / HTTP API / GUI / 浏览器
+│  Runtime   │  CLI / HTTP API / GUI (pyautogui) / Browser (Playwright)
 └────────────┘
+```
+
+## Runtime Types
+
+AI Hub 支持 4 种 Runtime，通过 Bridge 层统一接口：
+
+| Runtime | Bridge | 依赖 | 适用场景 |
+|---------|--------|------|---------|
+| CLI | `CLIBridge` | subprocess | Gemini CLI, QODER, QClaw |
+| HTTP API | `APIBridge` | urllib | OpenAI, Claude, DeepSeek |
+| GUI | `GUIBridge` | pyautogui | Marvis, 桌面 AI 应用 |
+| Browser | `BrowserBridge` | Playwright | Claude Web, ChatGPT Web |
+
+### BrowserBridge (Playwright)
+
+```python
+from core.bridge import BrowserBridge
+from core.task import Task
+
+bridge = BrowserBridge(headless=True, browser_type="chromium")
+
+# 方式 1: URL 自动导航 + 截图
+task = Task.from_text("https://example.com")
+result = bridge.run(task)
+
+# 方式 2: 结构化 actions
+task = Task.from_text("搜索 AI Hub", context={
+    "actions": [
+        {"action": "goto", "url": "https://google.com"},
+        {"action": "input", "selector": "#search", "text": "AI Hub"},
+        {"action": "click", "selector": "#search-btn"},
+        {"action": "wait", "selector": "#results"},
+        {"action": "screenshot", "name": "search_result"},
+        {"action": "extract", "selector": "#result-count"},
+    ]
+})
+result = bridge.run(task)
+print(result.output)          # 执行日志
+print(result.artifacts)       # ['/tmp/ai_hub_browser/search_result.png']
+```
+
+支持的 action：`goto` `wait` `input` `click` `screenshot` `extract` `scroll` `evaluate` `close`
+
+### GUIBridge (pyautogui)
+
+```python
+from core.bridge import GUIBridge
+from core.task import Task
+
+bridge = GUIBridge(app_name="Marvis")
+
+task = Task.from_text("GUI automation", context={
+    "actions": [
+        {"action": "move", "x": 500, "y": 300},
+        {"action": "click", "x": 500, "y": 300},
+        {"action": "type", "text": "Hello AI Hub"},
+        {"action": "press", "key": "Enter"},
+        {"action": "wait", "seconds": 2},
+        {"action": "screenshot", "name": "result"},
+    ]
+})
+result = bridge.run(task)
+```
+
+支持的 action：`move` `click` `type` `press` `screenshot` `wait` `scroll`
+
+### RuntimeRegistry
+
+```python
+from core.runtime_registry import RuntimeRegistry
+
+reg = RuntimeRegistry.default()
+
+# 创建 Bridge 实例
+bridge = reg.create_bridge("browser", headless=False)
+
+# 注册自定义 Runtime
+reg.register("my_runtime", MyBridge, description="custom")
+
+# 查看可用 Runtime
+print(reg.available_types())       # ['fake', 'cli', 'api', 'gui', 'browser']
+print(reg.available_runtimes())   # 当前实际可用的
 ```
 
 ## Compatibility Promise
@@ -178,8 +260,9 @@ python tests/validate_provider.py
 | Capability | ✅ Stable | 已定义的标签不会移除 |
 | Router | ✅ Stable | 外部接口不变，内部实现可升级 |
 | Bridge | ✅ Stable (V0.1.1) | 从第二个 Provider 起接口不再修改。新需求走 ADR。 |
-| GUIBridge | ⚠ Experimental | V0.3 实现 |
-| BrowserBridge | ⚠ Experimental | V0.5 实现 |
+| RuntimeRegistry | ⚠ Experimental | V0.2 新增，接口可能调整 |
+| GUIBridge | ⚠ Experimental | 已实现 MVP（pyautogui） |
+| BrowserBridge | ⚠ Experimental | 已实现 MVP（Playwright） |
 
 ## Bridge Types
 
@@ -188,8 +271,8 @@ python tests/validate_provider.py
 | `FakeBridge` | 不通信 | 测试 / 骨架验证 | ✅ Stable |
 | `CLIBridge` | CLI subprocess | Gemini CLI, QODER, QClaw | ✅ Stable |
 | `APIBridge` | HTTP 请求 | OpenAI API, Claude API | ✅ Stable |
-| `GUIBridge` | GUI 自动化 | Marvis | 🔜 V0.3 |
-| `BrowserBridge` | 浏览器控制 | Claude Web, ChatGPT Web | 🔜 V0.5 |
+| `GUIBridge` | GUI 自动化 | Marvis, 桌面 AI 应用 | ✅ MVP (pyautogui) |
+| `BrowserBridge` | 浏览器控制 | Claude Web, ChatGPT Web | ✅ MVP (Playwright) |
 
 ## Terminology
 
@@ -211,9 +294,9 @@ python tests/validate_provider.py
 | 版本 | 目标 | 成功标准 |
 |------|------|---------|
 | V0.0.6 | 接口冻结 + 文档统一 | 12 测试通过 + 4 Provider Validation ✅ |
-| V0.1 | 3 个真实 Provider | CLI + API + GUI 各一个，零修改核心接口 |
-| V0.2 | 额度管理 | Quota Manager + 自动切换 |
-| V0.3 | AI 智能路由 + GUIBridge | LLM 分类替代关键词 |
+| V0.1 | 4 个真实 Provider + Contract | CLI + API + BrowserBridge + GUIBridge ✅ |
+| V0.2 | Runtime 验证 | 4 种 Runtime 全部可跑通 |
+| V0.3 | AI 智能路由 | LLM 分类替代关键词 |
 | V0.5 | 任务分解 | 多步任务自动拆分 |
 | V1.0 | Agent 编排 | 多 Provider 协同 + 飞书交付 |
 | V2.0 | 插件生态 | 社区贡献 Provider |

@@ -254,6 +254,12 @@ def main():
     except ImportError:
         pass
 
+    try:
+        from providers.fake_browser.provider import FakeBrowserProvider
+        providers_to_validate.append(FakeBrowserProvider)
+    except ImportError:
+        pass
+
     all_passed = True
     for cls in providers_to_validate:
         if not validate_provider(cls):

@@ -487,57 +487,386 @@ class FakeBridge(Bridge):
 
 
 class GUIBridge(Bridge):
-    """GUI 桥接器（预留接口，V0.3 实现）。
+    """GUI 桥接器。
 
-    通过 GUI 自动化与桌面 AI 应用通信。
+    通过 pyautogui 操控桌面 GUI。
     适用于：Marvis、桌面应用等没有 CLI/API 的平台。
 
-    API Stability: Experimental (接口预留，实现待 V0.3)
+    支持的 action 类型：
+        - move:    {"action": "move", "x": 100, "y": 200}
+        - click:   {"action": "click", "x": 100, "y": 200, "button": "left"}
+        - type:    {"action": "type", "text": "hello world"}
+        - press:   {"action": "press", "key": "Enter"}
+        - screenshot: {"action": "screenshot", "name": "result"}
+        - wait:    {"action": "wait", "seconds": 2}
+        - scroll:  {"action": "scroll", "dy": 300}
+
+    Actions 来源（优先级）：
+        1. kwargs["actions"]
+        2. task.context["actions"]
+        3. 如果 task.content 是 JSON 且能解析为 action list，则使用
+
+    API Stability: Experimental
     """
 
-    def __init__(self, app_name: str = "", timeout: int = 300):
+    def __init__(
+        self,
+        app_name: str = "",
+        timeout: int = 300,
+        screenshot_dir: str = "/tmp/ai_hub_gui",
+    ):
         self.app_name = app_name
         self.timeout = timeout
+        self.screenshot_dir = screenshot_dir
+
+    def _import_pyautogui(self):
+        try:
+            import pyautogui
+            return pyautogui
+        except ImportError:
+            return None
+
+    def _get_actions(self, task: Task, **kwargs) -> list[dict]:
+        actions = kwargs.get("actions")
+        if actions:
+            return actions
+        actions = task.context.get("actions")
+        if actions:
+            return actions
+        import json
+        try:
+            parsed = json.loads(task.content)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return []
 
     def run(self, task: Task, **kwargs) -> BridgeResult:
-        # V0.3 实现：通过 pyautogui / platform APIs 操控 GUI
-        return BridgeResult(
-            success=False,
-            output="",
-            error=f"GUIBridge not yet implemented. App: {self.app_name}",
-        )
+        import os
+        import json
+
+        pyautogui = self._import_pyautogui()
+        if pyautogui is None:
+            return BridgeResult(
+                success=False,
+                output="",
+                error="pyautogui is not installed. Install with: pip install pyautogui",
+            )
+
+        actions = self._get_actions(task, **kwargs)
+        if not actions:
+            return BridgeResult(
+                success=False,
+                output="",
+                error="No actions provided. Pass actions via kwargs, task.context, or JSON in task.content.",
+            )
+
+        os.makedirs(self.screenshot_dir, exist_ok=True)
+        artifacts: list[str] = []
+        output_parts: list[str] = []
+        start = time.time()
+
+        try:
+            for i, action in enumerate(actions):
+                act_type = action.get("action", "")
+
+                if act_type == "move":
+                    x = action.get("x", 0)
+                    y = action.get("y", 0)
+                    duration = action.get("duration", 0.0)
+                    pyautogui.moveTo(x, y, duration=duration)
+                    output_parts.append(f"Moved to ({x}, {y})")
+
+                elif act_type == "click":
+                    x = action.get("x")
+                    y = action.get("y")
+                    button = action.get("button", "left")
+                    clicks = action.get("clicks", 1)
+                    if x is not None and y is not None:
+                        pyautogui.click(x, y, button=button, clicks=clicks)
+                        output_parts.append(f"Clicked ({x}, {y}) [{button}]")
+                    else:
+                        pyautogui.click(button=button, clicks=clicks)
+                        output_parts.append(f"Clicked [{button}]")
+
+                elif act_type == "type":
+                    text = action.get("text", "")
+                    interval = action.get("interval", 0.0)
+                    pyautogui.typewrite(text, interval=interval) if isinstance(text, str) else None
+                    output_parts.append(f"Typed: {text[:50]}{'...' if len(text) > 50 else ''}")
+
+                elif act_type == "press":
+                    key = action.get("key", "")
+                    if key:
+                        pyautogui.press(key)
+                        output_parts.append(f"Pressed: {key}")
+
+                elif act_type == "screenshot":
+                    name = action.get("name", f"screenshot_{i}")
+                    path = os.path.join(self.screenshot_dir, f"{name}.png")
+                    pyautogui.screenshot(path)
+                    artifacts.append(path)
+                    output_parts.append(f"Screenshot saved: {path}")
+
+                elif act_type == "wait":
+                    seconds = action.get("seconds", 1)
+                    time.sleep(seconds)
+                    output_parts.append(f"Waited {seconds}s")
+
+                elif act_type == "scroll":
+                    dy = action.get("dy", 300)
+                    x = action.get("x")
+                    y = action.get("y")
+                    if x is not None and y is not None:
+                        pyautogui.scroll(dy, x=x, y=y)
+                    else:
+                        pyautogui.scroll(dy)
+                    output_parts.append(f"Scrolled {dy}")
+
+                else:
+                    output_parts.append(f"Unknown action: {act_type}")
+
+            duration_ms = int((time.time() - start) * 1000)
+            return BridgeResult(
+                success=True,
+                output="\n".join(output_parts),
+                duration_ms=duration_ms,
+                artifacts=artifacts,
+            )
+
+        except Exception as e:
+            duration_ms = int((time.time() - start) * 1000)
+            return BridgeResult(
+                success=False,
+                output="\n".join(output_parts),
+                error=f"GUIBridge error: {e}",
+                duration_ms=duration_ms,
+                artifacts=artifacts,
+            )
 
     def check_available(self) -> bool:
-        # V0.3 实现：检查目标应用是否在运行
-        return False
+        pyautogui = self._import_pyautogui()
+        if pyautogui is None:
+            return False
+        try:
+            size = pyautogui.size()
+            return size.width > 0 and size.height > 0
+        except Exception:
+            return False
 
     def check_auth(self) -> bool:
-        return False
+        return self.check_available()
 
 
 class BrowserBridge(Bridge):
-    """Browser 桥接器（预留接口，V0.5 实现）。
+    """Browser 桥接器。
 
-    通过浏览器自动化与 Web AI 服务通信。
-    适用于：Claude Web、ChatGPT Web 等没有公开 API 的平台。
+    通过 Playwright 操控浏览器，适用于 Web AI 服务。
+    如：Claude Web、ChatGPT Web 等没有公开 API 的平台。
 
-    API Stability: Experimental (接口预留，实现待 V0.5)
+    支持的 action 类型：
+        - goto:       {"action": "goto", "url": "https://example.com"}
+        - wait:      {"action": "wait", "selector": "#content", "timeout": 5000}
+        - input:     {"action": "input", "selector": "#search", "text": "hello"}
+        - click:     {"action": "click", "selector": "#submit"}
+        - screenshot: {"action": "screenshot", "name": "result"}
+        - extract:   {"action": "extract", "selector": "#output"}
+        - scroll:    {"action": "scroll", "dy": 500}
+        - evaluate:  {"action": "evaluate", "script": "document.title"}
+        - close:     {"action": "close"}
+
+    Actions 来源（优先级）：
+        1. kwargs["actions"]
+        2. task.context["actions"]
+        3. 如果 task.content 是 URL（以 http 开头），自动构造 goto + screenshot
+        4. 如果 task.content 是 JSON 且能解析为 action list，则使用
+
+    API Stability: Experimental
     """
 
-    def __init__(self, url: str = "", timeout: int = 300):
+    def __init__(
+        self,
+        url: str = "",
+        timeout: int = 300,
+        headless: bool = True,
+        browser_type: str = "chromium",
+        screenshot_dir: str = "/tmp/ai_hub_browser",
+    ):
         self.url = url
         self.timeout = timeout
+        self.headless = headless
+        self.browser_type = browser_type
+        self.screenshot_dir = screenshot_dir
+
+    def _import_playwright(self):
+        try:
+            from playwright.sync_api import sync_playwright
+            return sync_playwright
+        except ImportError:
+            return None
+
+    def _get_actions(self, task: Task, **kwargs) -> list[dict]:
+        actions = kwargs.get("actions")
+        if actions:
+            return actions
+        actions = task.context.get("actions")
+        if actions:
+            return actions
+        import json
+        try:
+            parsed = json.loads(task.content)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # If content looks like a URL, auto-generate goto + screenshot
+        content = task.content.strip()
+        if content.startswith("http://") or content.startswith("https://"):
+            return [
+                {"action": "goto", "url": content},
+                {"action": "screenshot", "name": "page"},
+            ]
+        return []
 
     def run(self, task: Task, **kwargs) -> BridgeResult:
-        # V0.5 实现：通过 Playwright / CDP 操控浏览器
-        return BridgeResult(
-            success=False,
-            output="",
-            error=f"BrowserBridge not yet implemented. URL: {self.url}",
-        )
+        import os
+
+        sync_playwright = self._import_playwright()
+        if sync_playwright is None:
+            return BridgeResult(
+                success=False,
+                output="",
+                error="playwright is not installed. Install with: pip install playwright && playwright install",
+            )
+
+        actions = self._get_actions(task, **kwargs)
+        if not actions:
+            return BridgeResult(
+                success=False,
+                output="",
+                error="No actions provided. Pass actions via kwargs, task.context, JSON in task.content, or a URL.",
+            )
+
+        os.makedirs(self.screenshot_dir, exist_ok=True)
+        artifacts: list[str] = []
+        output_parts: list[str] = []
+        start = time.time()
+
+        browser_type = kwargs.get("browser_type", self.browser_type)
+        headless = kwargs.get("headless", self.headless)
+
+        try:
+            with sync_playwright() as p:
+                browser_launcher = getattr(p, browser_type, None)
+                if browser_launcher is None:
+                    return BridgeResult(
+                        success=False,
+                        output="",
+                        error=f"Unknown browser type: {browser_type}. Supported: chromium, firefox, webkit",
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+
+                browser = browser_launcher.launch(headless=headless)
+                context = browser.new_context()
+                page = context.new_page()
+
+                if self.url and not any(a.get("action") == "goto" for a in actions):
+                    page.goto(self.url, timeout=self.timeout * 1000)
+
+                for i, action in enumerate(actions):
+                    act_type = action.get("action", "")
+
+                    if act_type == "goto":
+                        url = action.get("url", "")
+                        page.goto(url, timeout=action.get("timeout", self.timeout * 1000))
+                        output_parts.append(f"Navigated to: {url}")
+
+                    elif act_type == "wait":
+                        selector = action.get("selector")
+                        wait_timeout = action.get("timeout", 30000)
+                        if selector:
+                            page.wait_for_selector(selector, timeout=wait_timeout)
+                            output_parts.append(f"Waited for: {selector}")
+                        else:
+                            page.wait_for_load_state("networkidle", timeout=wait_timeout)
+                            output_parts.append("Waited for network idle")
+
+                    elif act_type == "input":
+                        selector = action.get("selector", "")
+                        text = action.get("text", "")
+                        page.fill(selector, text)
+                        output_parts.append(f"Input into {selector}: {text[:50]}")
+
+                    elif act_type == "click":
+                        selector = action.get("selector", "")
+                        page.click(selector)
+                        output_parts.append(f"Clicked: {selector}")
+
+                    elif act_type == "screenshot":
+                        name = action.get("name", f"screenshot_{i}")
+                        path = os.path.join(self.screenshot_dir, f"{name}.png")
+                        page.screenshot(path=path)
+                        artifacts.append(path)
+                        output_parts.append(f"Screenshot: {path}")
+
+                    elif act_type == "extract":
+                        selector = action.get("selector", "")
+                        attr = action.get("attr", "textContent")
+                        extracted = page.get_attribute(selector, attr) if attr != "textContent" else page.text_content(selector)
+                        output_parts.append(f"Extracted [{selector}]: {extracted}")
+
+                    elif act_type == "scroll":
+                        dy = action.get("dy", 500)
+                        page.mouse.wheel(0, dy)
+                        output_parts.append(f"Scrolled down {dy}px")
+
+                    elif act_type == "evaluate":
+                        script = action.get("script", "")
+                        result = page.evaluate(script)
+                        output_parts.append(f"Evaluate result: {result}")
+
+                    elif act_type == "close":
+                        context.close()
+                        browser.close()
+                        output_parts.append("Browser closed")
+
+                    else:
+                        output_parts.append(f"Unknown action: {act_type}")
+
+                if not any(a.get("action") == "close" for a in actions):
+                    context.close()
+                    browser.close()
+
+            duration_ms = int((time.time() - start) * 1000)
+            return BridgeResult(
+                success=True,
+                output="\n".join(output_parts),
+                duration_ms=duration_ms,
+                artifacts=artifacts,
+            )
+
+        except Exception as e:
+            duration_ms = int((time.time() - start) * 1000)
+            return BridgeResult(
+                success=False,
+                output="\n".join(output_parts),
+                error=f"BrowserBridge error: {e}",
+                duration_ms=duration_ms,
+                artifacts=artifacts,
+            )
 
     def check_available(self) -> bool:
-        return False
+        sync_playwright = self._import_playwright()
+        if sync_playwright is None:
+            return False
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                browser.close()
+            return True
+        except Exception:
+            return False
 
     def check_auth(self) -> bool:
-        return False
+        return self.check_available()

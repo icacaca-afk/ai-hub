@@ -49,6 +49,9 @@ def _build_registry() -> CapabilityRegistry:
     from providers.qoder.provider import QoderProvider
     registry.register(QoderProvider())
 
+    from providers.fake_browser.provider import FakeBrowserProvider
+    registry.register(FakeBrowserProvider())
+
     return registry
 
 
