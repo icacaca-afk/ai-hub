@@ -74,6 +74,8 @@ class CLIBridge(Bridge):
     通过 subprocess 调用外部 CLI 工具执行任务。
     适用于：QODER、Gemini CLI、QClaw (openclaw) 等。
 
+    支持自定义命令模板和环境变量注入，适配不同 CLI 的调用方式。
+
     API Stability: Experimental
     """
 
@@ -83,16 +85,32 @@ class CLIBridge(Bridge):
         auth_command: str | None = None,
         version_command: str | None = None,
         timeout: int = 300,
+        command_template: str | None = None,
+        env: dict[str, str] | None = None,
     ):
         self.command = command
         self.auth_command = auth_command or f"{command} --version"
         self.version_command = version_command or f"{command} --version"
         self.timeout = timeout
+        # 自定义命令模板，如 'gemini -p "{task}" -o text --yolo --skip-trust'
+        # {task} 会被替换为 task.content
+        self.command_template = command_template or f'{command} "{{task}}"'
+        # 额外环境变量（会与 os.environ 合并）
+        self.env = env or {}
+
+    def _build_env(self) -> dict[str, str]:
+        """合并 os.environ 和 self.env。"""
+        import os
+        merged = os.environ.copy()
+        merged.update(self.env)
+        return merged
 
     def run(self, task: Task, **kwargs) -> BridgeResult:
-        cmd = kwargs.get("command_template", f'{self.command} "{{task}}"')
+        cmd_template = kwargs.get("command_template", self.command_template)
         timeout = kwargs.get("timeout", self.timeout)
-        full_cmd = cmd.format(task=task.content)
+        # 转义双引号，防止命令注入
+        safe_content = task.content.replace('"', '\\"')
+        full_cmd = cmd_template.format(task=safe_content)
 
         start = time.time()
         try:
@@ -104,6 +122,7 @@ class CLIBridge(Bridge):
                 timeout=timeout,
                 encoding="utf-8",
                 errors="replace",
+                env=self._build_env(),
             )
             duration = int((time.time() - start) * 1000)
 
@@ -155,12 +174,21 @@ class CLIBridge(Bridge):
                 timeout=10,
                 encoding="utf-8",
                 errors="replace",
+                env=self._build_env(),
             )
             return proc.returncode == 0
         except Exception:
             return False
 
     def check_auth(self) -> bool:
+        # 对于用 API Key 认证的 CLI，检查环境变量是否存在
+        if self.env:
+            import os
+            # 如果 env 中有 API key 类的变量且值不为空，认为已认证
+            api_keys = [v for k, v in self.env.items() if "KEY" in k.upper() or "TOKEN" in k.upper()]
+            if api_keys:
+                return all(v for v in api_keys)
+        # 否则用 auth_command 检查
         try:
             proc = subprocess.run(
                 self.auth_command,
@@ -170,6 +198,7 @@ class CLIBridge(Bridge):
                 timeout=10,
                 encoding="utf-8",
                 errors="replace",
+                env=self._build_env(),
             )
             return proc.returncode == 0
         except Exception:

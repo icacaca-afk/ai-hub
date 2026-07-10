@@ -29,11 +29,12 @@ def _build_registry() -> CapabilityRegistry:
     from providers.demo.provider import DemoProvider
     registry.register(DemoProvider())
 
-    # TODO: V0.1 接入真实 Provider 后取消注释
+    from providers.gemini.provider import GeminiCLIProvider
+    registry.register(GeminiCLIProvider())
+
+    # TODO: V0.1 后续接入
     # from providers.qoder.provider import QoderProvider
     # registry.register(QoderProvider())
-    # from providers.gemini.provider import GeminiCLIProvider
-    # registry.register(GeminiCLIProvider())
     # from providers.openai_api.provider import OpenAIAPIProvider
     # registry.register(OpenAIAPIProvider())
 
