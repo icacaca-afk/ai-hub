@@ -2,6 +2,33 @@
 
 > One Task. One Capability. Any AI. Any Runtime.
 
+## Architecture Validation
+
+| Bridge Type | Status | Real Provider Verified |
+-------------|--------|----------------------|
+| ✅ CLIBridge | Stable | Gemini CLI, QODER CLI, Stub |
+| ✅ APIBridge | Stable | DeepSeek (OpenAI-compatible) |
+| ⏳ GUIBridge | Planned | — |
+| ⏳ BrowserBridge | Planned | — |
+
+| KPI | Result |
+|-----|--------|
+| Zero Core Modification | ✅ `git diff core/ router/` = empty |
+| Bridge API Frozen | ✅ V0.1.1 (Stable) |
+| Contract Test | ✅ 6/6 passed |
+| Skeleton Tests | ✅ 12/12 passed |
+| ADRs | ✅ 4 published |
+
+## Release Gate
+
+Every release must pass:
+
+- ✅ Contract Test (`tests/test_provider_contract.py`)
+- ✅ Skeleton Tests (`tests/test_skeleton.py`)
+- ✅ Zero Core Modification (`git diff core/ router/`)
+- ✅ Documentation Updated
+- ✅ ADR (if architecture changes)
+
 ## Why AI Hub?
 
 Today's AI tools all have different interfaces:
@@ -58,6 +85,9 @@ python -m cli.main history   # 查看历史
 ```
 
 ## Add a New Provider in 30 Minutes
+
+> 完整指南见 [docs/provider_sdk.md](docs/provider_sdk.md)。
+> 示例代码见 [examples/](examples/)。
 
 只需要 3 步，**不改 Router、CLI、Registry 或任何其他代码**：
 
@@ -147,7 +177,7 @@ python tests/validate_provider.py
 | CapabilityRegistry | ✅ Stable | 方法签名不再变化 |
 | Capability | ✅ Stable | 已定义的标签不会移除 |
 | Router | ✅ Stable | 外部接口不变，内部实现可升级 |
-| Bridge | ⚠ Experimental | V0.1 阶段接口可能调整 |
+| Bridge | ✅ Stable (V0.1.1) | 从第二个 Provider 起接口不再修改。新需求走 ADR。 |
 | GUIBridge | ⚠ Experimental | V0.3 实现 |
 | BrowserBridge | ⚠ Experimental | V0.5 实现 |
 
