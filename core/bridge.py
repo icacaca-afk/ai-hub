@@ -209,7 +209,12 @@ class APIBridge(Bridge):
     """API 桥接器。
 
     通过 HTTP 请求调用外部 API 执行任务。
-    适用于：OpenAI API、Claude API、QODER API（如果有）等。
+    适用于：OpenAI API、OpenAI 兼容 API、Claude API 等。
+
+    参考 CLIBridge 风格设计：
+    - body_template: 请求体模板（对应 command_template），支持 {task} / {model} 占位符
+    - response_extractor: 响应提取路径（如 "choices[0].message.content"）
+    - health_endpoint: 健康检查端点（对应 version_command）
 
     API Stability: Experimental
     """
@@ -221,20 +226,94 @@ class APIBridge(Bridge):
         method: str = "POST",
         timeout: int = 300,
         headers: dict[str, str] | None = None,
+        body_template: dict | None = None,
+        response_extractor: str | None = None,
+        health_endpoint: str | None = None,
     ):
         self.endpoint = endpoint
         self.api_key_env = api_key_env
         self.method = method
         self.timeout = timeout
         self.headers = headers or {}
+        self.body_template = body_template or {
+            "task": "{task}",
+            "capabilities": [],
+        }
+        self.response_extractor = response_extractor
+        self.health_endpoint = health_endpoint
 
     def _get_api_key(self) -> str | None:
         import os
         return os.environ.get(self.api_key_env)
 
+    def _build_body(self, task: Task, **kwargs) -> dict:
+        import copy
+        template = kwargs.get("body_template", self.body_template)
+        return self._apply_template(template, task, **kwargs)
+
+    def _apply_template(self, template: dict, task: Task, **kwargs) -> dict:
+        import copy
+
+        def _replace(val):
+            if isinstance(val, str):
+                return val.format(
+                    task=task.content,
+                    model=kwargs.get("model", ""),
+                )
+            elif isinstance(val, dict):
+                return {k: _replace(v) for k, v in val.items()}
+            elif isinstance(val, list):
+                return [_replace(item) for item in val]
+            else:
+                return val
+
+        return _replace(copy.deepcopy(template))
+
+    def _extract_output(self, response_text: str) -> str:
+        import json
+
+        if not self.response_extractor:
+            return response_text
+
+        try:
+            data = json.loads(response_text)
+        except (json.JSONDecodeError, TypeError):
+            return response_text
+
+        path = self.response_extractor
+        current = data
+        try:
+            import re
+            tokens = re.findall(r'[^.\[\]]+', path)
+            for token in tokens:
+                if isinstance(current, list):
+                    try:
+                        idx = int(token)
+                        current = current[idx]
+                    except (ValueError, IndexError):
+                        return response_text
+                elif isinstance(current, dict):
+                    if token in current:
+                        current = current[token]
+                    else:
+                        return response_text
+                else:
+                    return response_text
+            return str(current) if current is not None else ""
+        except Exception:
+            return response_text
+
+    def _build_headers(self, api_key: str) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            **self.headers,
+        }
+
     def run(self, task: Task, **kwargs) -> BridgeResult:
         import json
         import urllib.request
+        import urllib.error
 
         api_key = self._get_api_key()
         if not api_key:
@@ -244,20 +323,17 @@ class APIBridge(Bridge):
                 error=f"API key not set in env: {self.api_key_env}",
             )
 
-        body = json.dumps({
-            "task": task.content,
-            "capabilities": task.capabilities,
-            **kwargs.get("extra_body", {}),
-        }).encode("utf-8")
+        body_dict = self._build_body(task, **kwargs)
+        extra_body = kwargs.get("extra_body", {})
+        if extra_body:
+            body_dict.update(extra_body)
+        body = json.dumps(body_dict, ensure_ascii=False).encode("utf-8")
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            **self.headers,
-        }
+        headers = self._build_headers(api_key)
+        endpoint = kwargs.get("endpoint", self.endpoint)
 
         req = urllib.request.Request(
-            self.endpoint,
+            endpoint,
             data=body,
             headers=headers,
             method=self.method,
@@ -266,18 +342,33 @@ class APIBridge(Bridge):
         start = time.time()
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                output = resp.read().decode("utf-8")
+                raw_output = resp.read().decode("utf-8", errors="replace")
                 duration = int((time.time() - start) * 1000)
+                output = self._extract_output(raw_output)
                 return BridgeResult(
                     success=True,
                     output=output,
                     duration_ms=duration,
+                    raw=raw_output,
                 )
         except urllib.error.HTTPError as e:
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
             return BridgeResult(
                 success=False,
                 output="",
-                error=f"HTTP {e.code}: {e.reason}",
+                error=f"HTTP {e.code}: {e.reason}\n{error_body}",
+                duration_ms=int((time.time() - start) * 1000),
+                raw=error_body,
+            )
+        except urllib.error.URLError as e:
+            return BridgeResult(
+                success=False,
+                output="",
+                error=f"URL Error: {e.reason}",
                 duration_ms=int((time.time() - start) * 1000),
             )
         except Exception as e:
@@ -290,7 +381,28 @@ class APIBridge(Bridge):
 
     def check_available(self) -> bool:
         api_key = self._get_api_key()
-        return api_key is not None
+        if not api_key:
+            return False
+
+        if self.health_endpoint:
+            import urllib.request
+            import urllib.error
+
+            try:
+                headers = self._build_headers(api_key)
+                if self.health_endpoint.startswith("http"):
+                    url = self.health_endpoint
+                else:
+                    base = self.endpoint.rsplit("/", 2)[0] if "/v1/" in self.endpoint else self.endpoint.rsplit("/", 1)[0]
+                    url = base + self.health_endpoint
+
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return 200 <= resp.status < 300
+            except Exception:
+                return False
+
+        return True
 
     def check_auth(self) -> bool:
         return self.check_available()

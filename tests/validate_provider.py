@@ -202,6 +202,12 @@ def main():
     except ImportError:
         pass
 
+    try:
+        from providers.openai_compatible.provider import OpenAICompatibleProvider
+        providers_to_validate.append(OpenAICompatibleProvider)
+    except ImportError:
+        pass
+
     all_passed = True
     for cls in providers_to_validate:
         if not validate_provider(cls):

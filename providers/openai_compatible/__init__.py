@@ -1,0 +1,1 @@
+"""OpenAI Compatible Provider package."""

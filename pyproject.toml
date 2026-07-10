@@ -14,4 +14,4 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [tool.setuptools]
-packages = ["core", "router", "cli", "providers", "providers.demo"]
+packages = ["core", "router", "cli", "providers", "providers.demo", "providers.gemini", "providers.qoder", "providers.openai_api", "providers.openai_compatible"]
