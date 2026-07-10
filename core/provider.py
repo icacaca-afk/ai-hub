@@ -1,12 +1,17 @@
-# AI Hub — Provider 基类（V0.0.5 重构）
+# AI Hub — Provider 基类（V0.0.6 冻结版）
 #
-# 核心变更：
-# 1. 引入 ProviderMetadata 数据类——声明式描述 Provider 能力
-# 2. 引入 Bridge——Provider 只声明通信方式，Bridge 负责执行
-# 3. 能力系统从 task_types 改为 capabilities（命名空间格式）
-# 4. Provider 实现只需 ~30 行：定义 metadata + 选 bridge + 4 个方法
+# Provider 是能力描述与选择策略的声明，不负责执行。
+# 执行交给 Bridge。Provider 通过 select_bridge() 告诉 Router 用哪个 Bridge。
 #
-# API 稳定性：Provider API = Stable，Bridge API = Experimental
+# Provider 接口：
+#   - metadata: ProviderMetadata（声明能力、优先级、降级链）
+#   - health() / authenticated() / quota_left(): 状态检查
+#   - select_bridge(task): 选择 Bridge（返回 Bridge 实例）
+#   - supports(capability): 是否支持某能力
+#
+# Provider 不实现 execute()。执行由 Router 调 bridge.run() 完成。
+#
+# API Stability: Stable
 
 from __future__ import annotations
 
@@ -14,8 +19,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.bridge import Bridge, BridgeResult
-from core.result import Result
+from core.bridge import Bridge
+from core.task import Task
 
 
 @dataclass
@@ -23,7 +28,9 @@ class ProviderMetadata:
     """Provider 元信息声明。
 
     每个 Provider 必须定义一个 ProviderMetadata 实例。
-    这是 Provider 对外暴露的全部信息，Router 和 Registry 只读这些字段。
+    这是 Provider 对外暴露的全部信息，Router 和 CapabilityRegistry 只读这些字段。
+
+    API Stability: Stable
     """
 
     name: str                           # 唯一标识符，如 "qoder"
@@ -52,14 +59,20 @@ class ProviderMetadata:
 class Provider(ABC):
     """所有 AI 平台适配器的基类。
 
+    Provider 只负责声明能力和选择 Bridge，不负责执行。
+    执行由 Router 调用 Bridge.run() 完成。
+
     新增一个 Provider 只需要：
     1. 定义 metadata（ProviderMetadata）
     2. 选择 bridge（CLIBridge / APIBridge / FakeBridge）
-    3. 实现 4 个方法（health / authenticated / quota_left / execute）
+    3. 实现 3 个方法（health / authenticated / quota_left）
+    4. 实现 select_bridge(task)（大多数情况直接返回 self.bridge）
 
-    不需要修改 Router、CLI、Registry 或其他 Provider 的代码。
+    不需要修改 Router、CLI、CapabilityRegistry 或其他 Provider 的代码。
 
-    Provider API: Stable（接口签名不再变化）
+    **新增 Provider 不允许修改 Router。**
+
+    API Stability: Stable
     """
 
     # 子类必须定义
@@ -104,27 +117,30 @@ class Provider(ABC):
             "auto_detect": self.metadata.quota_auto_detect,
         }
 
-    # ─── 执行 ───
+    # ─── Bridge 选择 ───
 
-    @abstractmethod
-    def execute(self, task: str, context: dict[str, Any] | None = None) -> Result:
-        """执行任务，返回统一格式的 Result。"""
-        ...
+    def select_bridge(self, task: Task) -> Bridge:
+        """选择用于执行此任务的 Bridge。
 
-    # ─── 预留接口 ───
+        大多数 Provider 只有一个 Bridge，直接返回 self.bridge。
+        如果一个 Provider 支持多种通信方式，可以根据 task 选择不同的 Bridge。
+
+        Args:
+            task: 任务对象
+
+        Returns:
+            Bridge 实例
+        """
+        return self.bridge
+
+    # ─── 能力查询 ───
 
     def supports(self, capability: str) -> bool:
-        """判断是否支持某能力标签。
-
-        Provider API: Stable
-        """
+        """判断是否支持某能力标签。"""
         return capability in self.metadata.capabilities
 
     def cost(self) -> dict[str, Any]:
-        """返回单次调用成本。
-
-        Provider API: Stable (预留)
-        """
+        """返回单次调用成本（预留）。"""
         return {
             "currency": self.metadata.cost_currency,
             "amount": self.metadata.cost_amount,
@@ -155,26 +171,3 @@ class Provider(ABC):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} name={self.name!r} caps={self.capabilities}>"
-
-    # ─── Bridge 辅助 ───
-
-    def _run_bridge(self, task: str, **kwargs) -> BridgeResult:
-        """调用 bridge 执行，返回 BridgeResult。
-
-        子类在 execute() 中调用此方法，
-        然后把 BridgeResult 转换为 Result。
-        """
-        return self.bridge.run(task, **kwargs)
-
-    @staticmethod
-    def _bridge_to_result(br: BridgeResult, provider_name: str) -> Result:
-        """将 BridgeResult 转换为统一的 Result。"""
-        return Result(
-            provider=provider_name,
-            status="success" if br.success else "failed",
-            output=br.output,
-            error=br.error,
-            metadata={
-                "duration_ms": br.duration_ms,
-            },
-        )

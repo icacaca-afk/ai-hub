@@ -1,7 +1,7 @@
 # AI Hub — Bridge 层
-# 桥接层：封装不同通信方式（CLI / API / GUI），对 Provider 屏蔽执行细节
+# 桥接层：封装不同通信方式（CLI / API / GUI / Browser），对 Provider 屏蔽执行细节
 #
-# Provider 只需要声明用哪种 Bridge，不需要自己处理 subprocess / HTTP / GUI 自动化。
+# Provider 只声明用哪种 Bridge，不关心底层是 subprocess / HTTP / GUI。
 # 新增通信方式只需要新增一个 Bridge 类，不改任何 Provider。
 #
 # 架构位置：
@@ -9,9 +9,9 @@
 #     ↓
 #   Bridge（封装通信方式）
 #     ↓
-#   Runtime（CLI 进程 / HTTP 请求 / GUI 操作）
+#   Runtime（CLI 进程 / HTTP 请求 / GUI 操作 / 浏览器控制）
 #
-# API 稳定性：Experimental（V0.1 阶段，接口可能调整）
+# API Stability: Experimental（V0.1 阶段接口可能调整）
 
 from __future__ import annotations
 
@@ -21,31 +21,40 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.task import Task
+
 
 @dataclass
 class BridgeResult:
-    """Bridge 执行结果。"""
+    """Bridge 执行结果。
+
+    由 Bridge.run() 返回，Router 负责将其转换为 Result。
+    """
 
     success: bool
-    output: str
+    output: str                           # 纯文本输出
     error: str | None = None
     duration_ms: int = 0
+    artifacts: list[str] = field(default_factory=list)  # 产物文件路径
     raw: Any = None
 
 
 class Bridge(ABC):
     """所有 Bridge 的基类。
 
-    Bridge 封装了与外部 AI 平台的通信方式。
-    Provider 通过 Bridge 执行任务，不需要关心底层是 CLI / API / GUI。
+    Bridge 封装了与外部 Runtime 的通信方式。
+    Provider 通过 select_bridge(task) 返回 Bridge 实例，
+    Router 调用 bridge.run(task) 执行任务。
+
+    API Stability: Experimental
     """
 
     @abstractmethod
-    def run(self, task: str, **kwargs) -> BridgeResult:
+    def run(self, task: Task, **kwargs) -> BridgeResult:
         """执行任务。
 
         Args:
-            task: 任务描述
+            task: Task 对象（包含 content、capabilities、context、artifacts）
             **kwargs: 额外参数（命令模板、超时等）
 
         Returns:
@@ -65,9 +74,7 @@ class CLIBridge(Bridge):
     通过 subprocess 调用外部 CLI 工具执行任务。
     适用于：QODER、Gemini CLI、QClaw (openclaw) 等。
 
-    使用方式：
-        bridge = CLIBridge(command="gemini")
-        result = bridge.run("写一个 Python 服务")
+    API Stability: Experimental
     """
 
     def __init__(
@@ -82,10 +89,10 @@ class CLIBridge(Bridge):
         self.version_command = version_command or f"{command} --version"
         self.timeout = timeout
 
-    def run(self, task: str, **kwargs) -> BridgeResult:
+    def run(self, task: Task, **kwargs) -> BridgeResult:
         cmd = kwargs.get("command_template", f'{self.command} "{{task}}"')
         timeout = kwargs.get("timeout", self.timeout)
-        full_cmd = cmd.format(task=task)
+        full_cmd = cmd.format(task=task.content)
 
         start = time.time()
         try:
@@ -175,12 +182,7 @@ class APIBridge(Bridge):
     通过 HTTP 请求调用外部 API 执行任务。
     适用于：OpenAI API、Claude API、QODER API（如果有）等。
 
-    使用方式：
-        bridge = APIBridge(
-            endpoint="https://api.example.com/v1/chat",
-            api_key_env="EXAMPLE_API_KEY",
-        )
-        result = bridge.run("写一个 Python 服务")
+    API Stability: Experimental
     """
 
     def __init__(
@@ -201,7 +203,7 @@ class APIBridge(Bridge):
         import os
         return os.environ.get(self.api_key_env)
 
-    def run(self, task: str, **kwargs) -> BridgeResult:
+    def run(self, task: Task, **kwargs) -> BridgeResult:
         import json
         import urllib.request
 
@@ -214,7 +216,8 @@ class APIBridge(Bridge):
             )
 
         body = json.dumps({
-            "task": task,
+            "task": task.content,
+            "capabilities": task.capabilities,
             **kwargs.get("extra_body", {}),
         }).encode("utf-8")
 
@@ -268,14 +271,9 @@ class FakeBridge(Bridge):
     """Fake 桥接器。
 
     不调用任何外部服务，永远返回预设结果。
-    用于：
-    - 骨架验证
-    - 单元测试
-    - Provider 开发调试
+    用于：骨架验证、单元测试、Provider 开发调试。
 
-    使用方式：
-        bridge = FakeBridge(response="Hello AI Hub!")
-        result = bridge.run("任何任务")
+    API Stability: Stable
     """
 
     def __init__(
@@ -288,12 +286,12 @@ class FakeBridge(Bridge):
         self._available = available
         self.delay_ms = delay_ms
 
-    def run(self, task: str, **kwargs) -> BridgeResult:
+    def run(self, task: Task, **kwargs) -> BridgeResult:
         if self.delay_ms > 0:
             time.sleep(self.delay_ms / 1000)
         return BridgeResult(
             success=True,
-            output=f"{self.response}\n\nYou said: {task}",
+            output=f"{self.response}\n\nYou said: {task.content}",
             duration_ms=self.delay_ms,
         )
 
@@ -302,3 +300,60 @@ class FakeBridge(Bridge):
 
     def check_auth(self) -> bool:
         return self._available
+
+
+class GUIBridge(Bridge):
+    """GUI 桥接器（预留接口，V0.3 实现）。
+
+    通过 GUI 自动化与桌面 AI 应用通信。
+    适用于：Marvis、桌面应用等没有 CLI/API 的平台。
+
+    API Stability: Experimental (接口预留，实现待 V0.3)
+    """
+
+    def __init__(self, app_name: str = "", timeout: int = 300):
+        self.app_name = app_name
+        self.timeout = timeout
+
+    def run(self, task: Task, **kwargs) -> BridgeResult:
+        # V0.3 实现：通过 pyautogui / platform APIs 操控 GUI
+        return BridgeResult(
+            success=False,
+            output="",
+            error=f"GUIBridge not yet implemented. App: {self.app_name}",
+        )
+
+    def check_available(self) -> bool:
+        # V0.3 实现：检查目标应用是否在运行
+        return False
+
+    def check_auth(self) -> bool:
+        return False
+
+
+class BrowserBridge(Bridge):
+    """Browser 桥接器（预留接口，V0.5 实现）。
+
+    通过浏览器自动化与 Web AI 服务通信。
+    适用于：Claude Web、ChatGPT Web 等没有公开 API 的平台。
+
+    API Stability: Experimental (接口预留，实现待 V0.5)
+    """
+
+    def __init__(self, url: str = "", timeout: int = 300):
+        self.url = url
+        self.timeout = timeout
+
+    def run(self, task: Task, **kwargs) -> BridgeResult:
+        # V0.5 实现：通过 Playwright / CDP 操控浏览器
+        return BridgeResult(
+            success=False,
+            output="",
+            error=f"BrowserBridge not yet implemented. URL: {self.url}",
+        )
+
+    def check_available(self) -> bool:
+        return False
+
+    def check_auth(self) -> bool:
+        return False

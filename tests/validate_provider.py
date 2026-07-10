@@ -8,9 +8,9 @@
 #   ✓ capabilities 是合法标签
 #   ✓ bridge 已设置
 #   ✓ available() 返回 bool
-#   ✓ execute() 返回 Result
-#   ✓ Result 格式正确
-#   ✓ 异常处理（执行失败时不崩溃）
+#   ✓ select_bridge(task) 返回 Bridge
+#   ✓ 没有 execute() 方法
+#   ✓ supports() 正确
 
 from __future__ import annotations
 
@@ -26,11 +26,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.provider import Provider, ProviderMetadata
 from core.bridge import Bridge
-from core.result import Result
+from core.task import Task
 from core.capabilities import CAPABILITIES
 
 
-# 颜色输出
 def ok(msg: str):
     print(f"  ✅ {msg}")
 
@@ -51,7 +50,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
     passed = True
 
     # 1. 检查 metadata
-    print("\n[1/7] Metadata")
+    print("\n[1/8] Metadata")
     metadata = getattr(provider_cls, "metadata", None)
     if not isinstance(metadata, ProviderMetadata):
         fail("metadata is not a ProviderMetadata instance")
@@ -78,7 +77,6 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         fail("metadata.capabilities is empty")
         passed = False
     else:
-        # 检查能力标签是否合法
         for cap in metadata.capabilities:
             if cap not in CAPABILITIES:
                 fail(f"unknown capability: {cap}")
@@ -86,11 +84,8 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
             else:
                 ok(f"capability: {cap}")
 
-    if metadata.priority < 0 or metadata.priority > 100:
-        warn(f"priority out of recommended range [0-100]: {metadata.priority}")
-
     # 2. 检查 bridge
-    print("\n[2/7] Bridge")
+    print("\n[2/8] Bridge")
     bridge = getattr(provider_cls, "bridge", None)
     if not isinstance(bridge, Bridge):
         fail("bridge is not a Bridge instance")
@@ -98,7 +93,7 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
     ok(f"bridge = {type(bridge).__name__}")
 
     # 3. 实例化
-    print("\n[3/7] Instantiation")
+    print("\n[3/8] Instantiation")
     try:
         provider = provider_cls()
         ok("instantiated successfully")
@@ -106,8 +101,16 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         fail(f"instantiation failed: {e}")
         return False
 
-    # 4. 检查 available()
-    print("\n[4/7] available()")
+    # 4. 检查没有 execute()
+    print("\n[4/8] No execute() method")
+    if hasattr(provider, "execute"):
+        fail("Provider has execute() — should be removed. Execution is Router's responsibility.")
+        passed = False
+    else:
+        ok("no execute() method (correct)")
+
+    # 5. 检查 available()
+    print("\n[5/8] available()")
     try:
         result = provider.available()
         if isinstance(result, bool):
@@ -119,8 +122,8 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         fail(f"available() raised: {e}")
         passed = False
 
-    # 5. 检查 quota_left()
-    print("\n[5/7] quota_left()")
+    # 6. 检查 quota_left()
+    print("\n[6/8] quota_left()")
     try:
         quota = provider.quota_left()
         if isinstance(quota, int):
@@ -132,28 +135,22 @@ def validate_provider(provider_cls: type[Provider]) -> bool:
         fail(f"quota_left() raised: {e}")
         passed = False
 
-    # 6. 检查 execute()
-    print("\n[6/7] execute()")
+    # 7. 检查 select_bridge()
+    print("\n[7/8] select_bridge()")
     try:
-        result = provider.execute("test task")
-        if not isinstance(result, Result):
-            fail(f"execute() returned {type(result).__name__}, expected Result")
-            passed = False
+        task = Task.from_text("test task")
+        br = provider.select_bridge(task)
+        if isinstance(br, Bridge):
+            ok(f"select_bridge() → {type(br).__name__}")
         else:
-            ok(f"execute() → Result(status={result.status})")
-            if not result.provider:
-                fail("Result.provider is empty")
-                passed = False
-            if result.status not in ("success", "failed", "timeout", "partial"):
-                fail(f"Result.status is invalid: {result.status}")
-                passed = False
+            fail(f"select_bridge() returned {type(br).__name__}, expected Bridge")
+            passed = False
     except Exception as e:
-        fail(f"execute() raised: {e}")
-        traceback.print_exc()
+        fail(f"select_bridge() raised: {e}")
         passed = False
 
-    # 7. 检查 supports()
-    print("\n[7/7] supports()")
+    # 8. 检查 supports()
+    print("\n[8/8] supports()")
     try:
         for cap in metadata.capabilities:
             if not provider.supports(cap):
@@ -187,7 +184,6 @@ def main():
         DemoProvider,
     ]
 
-    # 如果有更多 Provider，加入列表
     try:
         from providers.qoder.provider import QoderProvider
         providers_to_validate.append(QoderProvider)

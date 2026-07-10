@@ -5,11 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from core.provider import Provider, ProviderMetadata
 from core.bridge import FakeBridge
-from core.result import Result
 
 
 class DemoProvider(Provider):
@@ -43,10 +40,3 @@ class DemoProvider(Provider):
 
     def quota_left(self) -> int:
         return -1
-
-    def execute(self, task: str, context: dict[str, Any] | None = None) -> Result:
-        br = self._run_bridge(task)
-        result = self._bridge_to_result(br, self.name)
-        result.metadata["quota_remaining"] = -1
-        result.metadata["model"] = "demo-fake"
-        return result

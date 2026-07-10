@@ -1,9 +1,10 @@
-# AI Hub — Provider Registry
-# 维护所有已注册的 Provider 实例
+# AI Hub — CapabilityRegistry
+# Provider 注册与查询中心
 #
-# 核心变更（V0.0.5）：
-# - find_by_task_type → find_by_capability
-# - Router 不再按 task_type 查找，改为按 capability 查找
+# 维护 Capability → Provider 的映射。
+# Router 通过 CapabilityRegistry 查找 Provider，不直接持有 Provider 列表。
+#
+# API Stability: Stable
 
 from __future__ import annotations
 
@@ -12,11 +13,13 @@ from typing import Dict, List
 from core.provider import Provider
 
 
-class ProviderRegistry:
+class CapabilityRegistry:
     """Provider 注册中心。
 
     所有 Provider 实例启动时注册到这里。
-    Router 通过 Registry 按 capability 查找候选 Provider。
+    Router 通过 CapabilityRegistry 按 capability 查找候选 Provider。
+
+    API Stability: Stable
     """
 
     def __init__(self):
@@ -34,14 +37,7 @@ class ProviderRegistry:
         return list(self._providers.values())
 
     def find_by_capability(self, capability: str) -> List[Provider]:
-        """找出支持某能力标签的所有 Provider。
-
-        Args:
-            capability: 能力标签，如 "code.generate"
-
-        Returns:
-            支持该能力的 Provider 列表，按 priority 降序排列。
-        """
+        """找出支持某能力标签的所有 Provider，按 priority 降序排列。"""
         candidates = [p for p in self._providers.values() if p.supports(capability)]
         return sorted(candidates, key=lambda p: p.priority, reverse=True)
 
@@ -51,10 +47,7 @@ class ProviderRegistry:
         return [p for p in candidates if p.available()]
 
     def find_by_any_capability(self, capabilities: list[str]) -> List[Provider]:
-        """找出支持给定能力列表中任意一个的 Provider。
-
-        去重后按 priority 降序排列。
-        """
+        """找出支持给定能力列表中任意一个的 Provider（去重，按 priority 降序）。"""
         seen: set[str] = set()
         result: list[Provider] = []
         for cap in capabilities:

@@ -5,31 +5,31 @@
 #   ai-hub history
 #   ai-hub status
 #   ai-hub quota
+#   ai-hub caps
 
 from __future__ import annotations
 
 import sys
 import time
 
-# Windows 控制台编码修复
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from core.registry import ProviderRegistry
+from core.registry import CapabilityRegistry
+from core.task import Task
 from core.history import HistoryStore
 from router.router import Router
-from core.capabilities import classify
 
 
-def _build_registry() -> ProviderRegistry:
-    """构建 Provider 注册中心。"""
-    registry = ProviderRegistry()
+def _build_registry() -> CapabilityRegistry:
+    """构建 CapabilityRegistry。"""
+    registry = CapabilityRegistry()
 
     from providers.demo.provider import DemoProvider
     registry.register(DemoProvider())
 
-    # TODO: 接入真实 Provider 后取消注释
+    # TODO: V0.1 接入真实 Provider 后取消注释
     # from providers.qoder.provider import QoderProvider
     # registry.register(QoderProvider())
     # from providers.gemini.provider import GeminiCLIProvider
@@ -45,36 +45,47 @@ def cmd_ask(args: list[str]) -> None:
         print('Usage: ai-hub ask "<task description>"')
         sys.exit(1)
 
-    task = " ".join(args)
+    text = " ".join(args)
     registry = _build_registry()
     router = Router(registry)
     history = HistoryStore()
 
+    # 创建 Task
+    task = Task.from_text(text)
+
+    print(f"[Router] Capabilities: {task.capabilities}")
+
     # 路由
-    caps, provider = router.route(task)
+    provider = router.route(task)
 
     if provider is None:
-        print(f"[Router] No available provider for capabilities: {caps}")
-        print(f"[Router] Task: {task}")
+        print(f"[Router] No available provider for capabilities: {task.capabilities}")
+        print(f"[Router] Task: {text}")
         sys.exit(1)
 
-    print(f"[Router] Capabilities: {caps}")
     print(f"[Router] Provider:     {provider.display_name}")
+    bridge = provider.select_bridge(task)
+    print(f"[Router] Bridge:       {type(bridge).__name__}")
     print()
 
     # 执行
     start = time.time()
-    result = provider.execute(task)
+    result = router.execute(task)
     duration = int((time.time() - start) * 1000)
 
     if "duration_ms" not in result.metadata:
         result.metadata["duration_ms"] = duration
 
     # 记录历史
-    history.add(task, ",".join(caps), provider.name, result)
+    history.add(task.content, ",".join(task.capabilities), provider.name, result)
 
     # 输出
     print(result.output)
+
+    if result.artifacts:
+        print(f"\n[Artifacts]")
+        for a in result.artifacts:
+            print(f"  - {a}")
 
     if not result.is_success:
         print(f"\n[Error] {result.error}", file=sys.stderr)
@@ -140,12 +151,12 @@ def cmd_caps(args: list[str]) -> None:
     for cap, desc in sorted(CAPABILITIES.items()):
         providers = registry.find_by_capability(cap)
         provider_names = ", ".join(p.name for p in providers) or "(none)"
-        print(f"  {cap:<20} {desc:<12} → {provider_names}")
+        print(f"  {cap:<20} {desc:<12} -> {provider_names}")
 
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("AI Hub — One command. Multiple providers. Free-first routing.\n")
+        print("AI Hub — One Task. Any AI. Any Runtime.\n")
         print("Usage:")
         print('  ai-hub ask "<task>"    Execute a task')
         print("  ai-hub history [N]      Show recent N tasks (default 10)")

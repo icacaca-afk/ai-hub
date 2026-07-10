@@ -1,28 +1,21 @@
-name: Provider Validation
+name: Validate Providers
 
 on:
-  push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
+    paths:
+      - 'providers/**'
+      - 'core/**'
+      - 'tests/**'
 
 jobs:
   validate:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-
+          python-version: '3.11'
       - name: Run skeleton tests
         run: python tests/test_skeleton.py
-
-      - name: Run provider validation
+      - name: Validate providers
         run: python tests/validate_provider.py
