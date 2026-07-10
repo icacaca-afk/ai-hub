@@ -2,7 +2,27 @@
 
 > One Task. One Capability. Any AI. Any Runtime.
 
-Route one task to the best AI provider automatically.
+## Why AI Hub?
+
+Today's AI tools all have different interfaces:
+
+```
+QODER      → CLI
+Claude     → API
+Gemini     → CLI
+Marvis     → GUI
+OpenAI     → API
+```
+
+You learn each one. You switch between them. You lose context.
+
+**AI Hub unifies execution — not models.**
+
+One task in. The best available AI runs it. You get one result back.
+
+```
+Task → Capability → Provider → Bridge → Runtime → Result
+```
 
 ## Philosophy
 
@@ -21,16 +41,10 @@ add streaming, Providers may add health checks — but this chain never changes.
 
 ---
 
-```
-Task → Router → Capability → Registry → Provider → Bridge → Runtime → Result
-```
-
-**新增 Provider 不允许修改 Router。**
-
 ## Quick Start
 
 ```bash
-git clone https://github.com/<your-org>/ai-hub.git
+git clone https://github.com/icacaca-afk/ai-hub.git
 cd ai-hub
 
 # 骨架验证（不需要任何外部服务）
@@ -60,7 +74,6 @@ providers/your_platform/
 ```python
 from core.provider import Provider, ProviderMetadata
 from core.bridge import CLIBridge
-from core.result import Result
 
 class YourProvider(Provider):
     metadata = ProviderMetadata(
@@ -77,10 +90,6 @@ class YourProvider(Provider):
     def health(self): return self.bridge.check_available()
     def authenticated(self): return self.bridge.check_auth()
     def quota_left(self): return -1
-
-    def execute(self, task, context=None):
-        br = self._run_bridge(task)
-        return self._bridge_to_result(br, self.name)
 ```
 
 ### Step 3: 注册 + 验证
@@ -116,17 +125,31 @@ python tests/validate_provider.py
 └──────┬─────────────┘
        ▼
 ┌────────────┐
-│  Provider  │  metadata（声明能力）+ execute（语法糖）
+│  Provider  │  metadata（声明能力）+ select_bridge(task) → Bridge
+└──────┬─────┘  【不实现 execute()】
+       ▼
+┌────────────┐
+│   Bridge   │  通信层（CLI / API / GUI / Browser）
 └──────┬─────┘
        ▼
 ┌────────────┐
-│   Bridge   │  通信层（对 Provider 屏蔽 Runtime 细节）
-└──────┬─────┘
-       ▼
-┌────────────┐
-│  Runtime   │  CLI 进程 / HTTP API / GUI
+│  Runtime   │  CLI 进程 / HTTP API / GUI / 浏览器
 └────────────┘
 ```
+
+## Compatibility Promise
+
+| API | Status | 含义 |
+|-----|--------|------|
+| Task | ✅ Stable | 数据结构不再变化 |
+| Result | ✅ Stable | 数据结构不再变化 |
+| Provider | ✅ Stable | 接口签名不再变化，新参数只能带默认值 |
+| CapabilityRegistry | ✅ Stable | 方法签名不再变化 |
+| Capability | ✅ Stable | 已定义的标签不会移除 |
+| Router | ✅ Stable | 外部接口不变，内部实现可升级 |
+| Bridge | ⚠ Experimental | V0.1 阶段接口可能调整 |
+| GUIBridge | ⚠ Experimental | V0.3 实现 |
+| BrowserBridge | ⚠ Experimental | V0.5 实现 |
 
 ## Bridge Types
 
@@ -144,21 +167,22 @@ python tests/validate_provider.py
 
 | 名词 | 定义 |
 |------|------|
-| Task | 用户提交的请求 |
+| Task | 用户提交的请求（自然语言字符串） |
 | Capability | 系统识别出的能力标签，如 `code.generate` |
-| Provider | 能力声明 + Bridge 选择策略，不负责通信细节 |
+| Provider | 能力声明 + Bridge 选择策略，不负责执行 |
 | Bridge | 与 Runtime 通信的实现层 |
 | Runtime | 真正执行任务的 AI 平台实例 |
-| Result | 统一结果格式 |
+| Result | 统一结果格式（output + artifacts） |
 | CapabilityRegistry | Capability → Provider 的注册与查询中心 |
-| Router | 根据 Capability 选择 Provider |
+| Router | 根据 Capability 选择 Provider 并执行 |
 
 ## Roadmap
 
 | 版本 | 目标 | 成功标准 |
 |------|------|---------|
-| V0.0.5 | Bridge + Capability + Validation | 三种 Bridge 跑通同一接口 ✅ |
-| V0.1 | 3 个真实 Provider | API + CLI + GUI 各一个，不改 Router |
+| V0.0.6 | 接口冻结 + 文档统一 | 12 测试通过 + 4 Provider Validation ✅ |
+| V0.1 | 3 个真实 Provider | CLI + API + GUI 各一个，零修改核心接口 |
+| V0.2 | 额度管理 | Quota Manager + 自动切换 |
 | V0.3 | AI 智能路由 + GUIBridge | LLM 分类替代关键词 |
 | V0.5 | 任务分解 | 多步任务自动拆分 |
 | V1.0 | Agent 编排 | 多 Provider 协同 + 飞书交付 |
