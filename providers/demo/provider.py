@@ -1,65 +1,52 @@
-# AI Hub — Demo Provider
-# 用于验证端到端流程，不调用任何真实 AI 平台
+# AI Hub — Demo Provider（使用 FakeBridge）
 #
-# 用法：
-#   ai-hub ask "你好"
-#   → DemoProvider.execute("你好")
-#   → Result(provider="demo", status="success", output="Hello AI Hub! ...")
+# 用于骨架验证，不调用任何外部服务。
+# 新增一个 Provider 只需要这么多代码。
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.provider import Provider
+from core.provider import Provider, ProviderMetadata
+from core.bridge import FakeBridge
 from core.result import Result
 
 
 class DemoProvider(Provider):
-    """Fake Provider，用于验证骨架是否跑通。
+    """Demo Provider，使用 FakeBridge，用于验证骨架。"""
 
-    不依赖任何外部服务，永远返回成功。
-    接入第一个真实 Provider 后可以移除。
-    """
+    metadata = ProviderMetadata(
+        name="demo",
+        display_name="Demo",
+        description="Fake provider for skeleton validation",
+        version="0.0.1",
+        capabilities=[
+            "code.generate",
+            "text.summarize",
+            "search.web",
+            "file.organize",
+            "general.chat",
+        ],
+        priority=0,
+        fallback=[],
+        quota_type="unlimited",
+        quota_total=-1,
+    )
 
-    name = "demo"
-    display_name = "Demo"
-    description = "Fake provider for skeleton validation"
-    version = "0.0.1"
-
-    capabilities = ["general"]
-    task_types = ["general", "coding", "analysis", "search", "file_ops"]
-
-    priority = 0
-    fallback: list[str] = []
+    bridge = FakeBridge(response="Hello AI Hub! (Demo Provider)")
 
     def health(self) -> bool:
-        return True
+        return self.bridge.check_available()
 
     def authenticated(self) -> bool:
-        return True
+        return self.bridge.check_available()
 
     def quota_left(self) -> int:
-        return -1  # 无限制
-
-    def quota_info(self) -> dict[str, Any]:
-        return {
-            "type": "unlimited",
-            "total": -1,
-            "remaining": -1,
-            "reset_at": None,
-            "auto_detect": False,
-        }
+        return -1
 
     def execute(self, task: str, context: dict[str, Any] | None = None) -> Result:
-        return Result(
-            provider=self.name,
-            status="success",
-            output=f"Hello AI Hub!\n\nYou said: {task}\n\n(This is a demo response. Replace with a real provider.)",
-            error=None,
-            metadata={
-                "duration_ms": 0,
-                "tokens_used": 0,
-                "quota_remaining": -1,
-                "model": "demo-fake",
-            },
-        )
+        br = self._run_bridge(task)
+        result = self._bridge_to_result(br, self.name)
+        result.metadata["quota_remaining"] = -1
+        result.metadata["model"] = "demo-fake"
+        return result

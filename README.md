@@ -2,129 +2,189 @@
 
 > **One command. Multiple providers. Free-first routing.**
 
-AI Hub 是一个能够自动调用多个 AI 工具、优先使用免费额度完成任务的统一入口。
-
-说一句话，系统自动选最合适的免费平台，返回结果。你不需要知道背后是谁干的。
-
-## Why?
-
-2026 年，你手上有 QODER、Gemini CLI、QClaw、ChatGPT、Coze……每次完成任务都要手动判断用哪个、查额度、切换平台。
-
-**问题不是没有工具，而是工具太多。**
-
-AI Hub 解决这个问题：
+AI Hub 让你在 30 分钟内接入任意 AI 平台——API、CLI、GUI，同一套接口，同一套路由。
 
 ```
-ai-hub ask "写一个 Python HTTP 服务"
-  → [Router] 识别为 coding 任务
-  → [Provider] 选择 QODER（额度充足，优先级最高）
-  → 返回代码
-```
-
-额度用完？自动切换：
-
-```
-ai-hub ask "搜索 Rust 1.80 新特性"
-  → [Router] 识别为 search 任务
-  → [Provider] Gemini CLI 不可用 → 自动切到 QClaw
-  → 返回结果
+You
+ ↓
+CLI
+ ↓
+Router ──→ Capability ──→ Registry
+                            ↓
+                        Provider
+                            ↓
+                         Bridge ──→ CLI subprocess
+                                  ──→ HTTP API
+                                  ──→ GUI automation
 ```
 
 ## Quick Start
 
 ```bash
-# 克隆
 git clone https://github.com/<your-org>/ai-hub.git
 cd ai-hub
 
-# 跑通骨架验证（使用 Demo Provider，不需要任何外部服务）
+# 骨架验证（不需要任何外部服务）
 python tests/test_skeleton.py
 
 # 试用
-python -m cli.main ask "你好"
-python -m cli.main status
-python -m cli.main history
+python -m cli.main ask "写一个 Python HTTP 服务"
+python -m cli.main caps      # 查看能力映射
+python -m cli.main status    # 查看 Provider 状态
+python -m cli.main history   # 查看历史
 ```
 
-## Features
+## Add a New Provider in 30 Minutes
 
-| 功能 | 状态 |
-|------|------|
-| Provider 管理（多平台接入） | ✅ V0.0 骨架 |
-| 规则路由（关键词 + 优先级） | ✅ V0.0 骨架 |
-| 统一 CLI | ✅ V0.0 骨架 |
-| 统一结果格式 | ✅ V0.0 骨架 |
-| 历史记录 | ✅ V0.0 骨架 |
-| 免费额度管理 | 🔜 V0.2 |
-| AI 智能路由 | 🔜 V0.3 |
-| 任务分解 | 🔜 V0.5 |
-| Agent 编排 | 🔜 V1.0 |
-| 插件生态 | 🔜 V2.0 |
+只需要 3 步，**不改 Router、CLI、Registry 或任何其他代码**：
+
+### Step 1: 创建目录
+
+```
+providers/your_platform/
+├── __init__.py
+├── provider.py      # 你的 Provider 实现
+└── manifest.yaml    # 元信息（可选，也可在代码中声明）
+```
+
+### Step 2: 写 provider.py（~30 行）
+
+```python
+from core.provider import Provider, ProviderMetadata
+from core.bridge import CLIBridge    # 或 APIBridge / FakeBridge
+from core.result import Result
+
+class YourProvider(Provider):
+    metadata = ProviderMetadata(
+        name="your_platform",
+        display_name="Your Platform",
+        description="一句话描述",
+        capabilities=["code.generate", "text.summarize"],
+        priority=90,
+        fallback=["demo"],
+    )
+
+    bridge = CLIBridge(command="your-cli")
+
+    def health(self): return self.bridge.check_available()
+    def authenticated(self): return self.bridge.check_auth()
+    def quota_left(self): return -1
+
+    def execute(self, task, context=None):
+        br = self._run_bridge(task)
+        return self._bridge_to_result(br, self.name)
+```
+
+### Step 3: 注册 + 验证
+
+```python
+# cli/main.py 的 _build_registry() 中加一行
+registry.register(YourProvider())
+```
+
+```bash
+# 验证
+python tests/validate_provider.py
+```
+
+**搞定。** Router 会自动按 capability 路由到你的 Provider。
 
 ## Architecture
 
 ```
-┌────────────────┐
-│   CLI Entry    │
-└───────┬────────┘
-        ▼
-┌────────────────┐
-│    Router      │  ← 规则路由（V0.1）→ AI 路由（V0.3）
-└───────┬────────┘
-        ▼
-┌────────────────┐
-│    Registry    │  ← Provider 注册中心 + 额度管理
-└───────┬────────┘
-    ┌───┼───┬───────┐
-    ▼   ▼   ▼       ▼
- QODER Gemini QClaw ChatGPT  ← 各平台适配器（统一接口）
-    │   │   │       │
-    └───┴───┴───────┘
-            ▼
-    ┌────────────────┐
-    │  Result Store   │  ← 统一结果格式 + 历史记录
-    └────────────────┘
+┌────────────┐
+│    User     │
+└──────┬─────┘
+       ▼
+┌────────────┐
+│    CLI     │  ask / history / status / caps / quota
+└──────┬─────┘
+       ▼
+┌────────────┐
+│   Router   │  Task → 关键词 → Capability → Provider
+└──────┬─────┘
+       ▼
+┌────────────┐
+│  Registry  │  按 capability 查找 + 优先级排序
+└──────┬─────┘
+       ▼
+┌────────────┐
+│  Provider  │  metadata + 4 个方法
+└──────┬─────┘
+       ▼
+┌────────────┐
+│   Bridge   │  CLIBridge / APIBridge / FakeBridge (未来: GUIBridge)
+└──────┬─────┘
+       ▼
+┌────────────┐
+│  Runtime   │  subprocess / HTTP / GUI
+└────────────┘
 ```
 
-## Add a New Provider
+## Bridge Types
 
-只需要 3 步：
+| Bridge | 通信方式 | 适用平台 | 状态 |
+|--------|---------|---------|------|
+| `FakeBridge` | 不通信 | 测试 / 骨架验证 | ✅ Stable |
+| `CLIBridge` | CLI subprocess | Gemini CLI, QODER, QClaw | ✅ Stable |
+| `APIBridge` | HTTP 请求 | OpenAI API, Claude API | ✅ Stable |
+| `GUIBridge` | GUI 自动化 | Marvis, 桌面应用 | 🔜 V0.3 |
 
-1. 创建 `providers/your_platform/` 目录
-2. 继承 `Provider` 基类，实现 4 个方法：`health()` / `authenticated()` / `quota_left()` / `execute()`
-3. 注册到 Registry
+## API Stability
 
-**不需要修改 Router、CLI 或其他 Provider 的代码。**
+| API | 状态 | 含义 |
+|-----|------|------|
+| Provider API | **Stable** | 接口签名不再变化，新参数只能带默认值 |
+| Result API | **Stable** | 数据结构不再变化 |
+| Registry API | **Stable** | 方法签名不再变化 |
+| Capability API | **Stable** | 能力标签定义不再移除 |
+| Bridge API | **Experimental** | V0.1 阶段接口可能调整 |
+| Router API | **Stable** | 路由逻辑内部可变，外部接口不变 |
 
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+## Capabilities
 
-## Design Philosophy
+能力标签采用命名空间格式 `domain.action`：
 
-- **Provider 接口是项目最核心的资产**——一旦定义，长期不变
-- **渐进式架构**——每一层可以独立升级，不需要推翻重来
-- **配置驱动**——能力描述、路由规则全部外置为 YAML
-- **免费优先**——Router 优先选择有免费额度的 Provider
+| 标签 | 说明 |
+|------|------|
+| `code.generate` | 生成代码 |
+| `code.debug` | 调试代码 |
+| `code.refactor` | 重构代码 |
+| `code.review` | 代码审查 |
+| `text.summarize` | 总结文本 |
+| `text.analyze` | 分析文本 |
+| `text.translate` | 翻译文本 |
+| `text.generate` | 生成文本 |
+| `search.web` | 搜索网络 |
+| `search.local` | 本地搜索 |
+| `file.organize` | 整理文件 |
+| `file.transform` | 文件转换 |
+| `general.chat` | 通用对话 |
 
-详见 [DESIGN.md](DESIGN.md)。
+## Provider Validation
+
+每个 Provider 自动验证 7 项检查：
+
+```bash
+python tests/validate_provider.py
+```
+
+检查项：metadata → capabilities → bridge → available() → quota_left() → execute() → supports()
+
+GitHub Action 自动在每次 PR 时运行验证。
 
 ## Roadmap
 
-| 版本 | 目标 | 状态 |
-|------|------|------|
-| V0.0 | Skeleton（骨架验证） | ✅ |
-| V0.1 | AI 聚合器（3 个真实 Provider） | 🔜 |
-| V0.2 | 额度管理 + Web UI | 📋 |
-| V0.3 | AI 智能路由 | 📋 |
-| V0.5 | 任务分解 | 📋 |
-| V1.0 | Agent 编排 | 📋 |
-| V2.0 | 插件生态 | 📋 |
-
-详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+| 版本 | 目标 | 成功标准 |
+|------|------|---------|
+| V0.0.5 | Bridge + Capability + Validation | 三种 Bridge 跑通同一接口 ✅ |
+| V0.1 | 3 个真实 Provider | API + CLI + GUI 各一个，不改 Router |
+| V0.2 | 额度管理 + Web UI | 可视化额度状态 |
+| V0.3 | AI 智能路由 | LLM 分类替代关键词 |
+| V0.5 | 任务分解 | 多步任务自动拆分 |
+| V1.0 | Agent 编排 | 多 Provider 协同 |
+| V2.0 | 插件生态 | 社区贡献 Provider |
 
 ## License
 
 MIT
-
----
-
-**Use all your free AI quotas through one unified interface.**

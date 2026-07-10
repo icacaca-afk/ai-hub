@@ -1,5 +1,6 @@
 """Router package."""
 
-from router.router import Router, classify_task
+from router.router import Router
+from core.capabilities import classify
 
-__all__ = ["Router", "classify_task"]
+__all__ = ["Router", "classify"]

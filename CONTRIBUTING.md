@@ -1,204 +1,115 @@
-# CONTRIBUTING.md
-## 如何为 AI Hub 贡献代码
+# Contributing to AI Hub
 
-> 感谢你有兴趣参与！这个项目的核心非常简单——只要你能实现一个接口，就能接入一个 AI 平台。
-
----
-
-## 快速上手
+## Quick Start
 
 ```bash
-# 1. 克隆仓库
 git clone https://github.com/<your-org>/ai-hub.git
 cd ai-hub
-
-# 2. 运行骨架验证
 python tests/test_skeleton.py
-
-# 3. 用 Demo Provider 跑通端到端
-python -m cli.main ask "你好"
 ```
 
----
+## Add a New Provider (3 步)
 
-## 如何新增一个 Provider
-
-### 第一步：创建配置文件
-
-在 `providers/` 目录下创建你的 Provider 目录和 YAML 配置：
+### Step 1: 创建目录
 
 ```
-providers/
-└── your_platform/
-    ├── __init__.py
-    ├── provider.py      # 适配器代码
-    └── your_platform.yaml  # 配置文件
+providers/your_platform/
+├── __init__.py
+├── provider.py
+└── manifest.yaml    # 可选
 ```
 
-配置文件模板（参考 `providers/qoder/qoder.yaml`）：
-
-```yaml
-provider: your_platform
-display_name: YourPlatform
-description: 一句话描述
-version: "0.1.0"
-
-capabilities:
-  - coding          # 能力标签
-
-task_types:
-  - coding          # 支持的任务类型
-
-priority: 50        # 优先级（0-100，越大越优先）
-fallback:
-  - gemini_cli      # 不可用时降级到谁
-
-quota:
-  type: daily
-  total: 100
-  remaining: 100
-  auto_detect: false
-
-health_check:
-  method: cli
-  command: "your_platform --version"
-  expect_contains: "your_platform"
-  timeout: 10
-
-auth_check:
-  method: cli
-  command: "your_platform auth status"
-  expect_contains: "logged in"
-  timeout: 10
-
-executor:
-  type: cli
-  command_template: "your_platform run \"{task}\""
-  timeout: 300
-
-status: enabled
-```
-
-### 第二步：实现适配器
-
-继承 `Provider` 基类，实现 4 个方法：
+### Step 2: 实现 Provider（~30 行）
 
 ```python
-# providers/your_platform/provider.py
-
-from core.provider import Provider
+from core.provider import Provider, ProviderMetadata
+from core.bridge import CLIBridge    # 或 APIBridge
 from core.result import Result
 
+class YourProvider(Provider):
+    metadata = ProviderMetadata(
+        name="your_platform",
+        display_name="Your Platform",
+        description="一句话描述",
+        capabilities=["code.generate"],  # 见 core/capabilities.py 中的完整列表
+        priority=90,
+        fallback=["demo"],
+    )
 
-class YourPlatformProvider(Provider):
-    name = "your_platform"
-    display_name = "YourPlatform"
-    description = "一句话描述"
-    version = "0.1.0"
+    bridge = CLIBridge(command="your-cli")
 
-    capabilities = ["coding"]
-    task_types = ["coding"]
-    priority = 50
-    fallback = ["gemini_cli"]
+    def health(self): return self.bridge.check_available()
+    def authenticated(self): return self.bridge.check_auth()
+    def quota_left(self): return -1
 
-    def health(self) -> bool:
-        # 检查服务是否在线（通常是检查 CLI 是否安装）
-        ...
-
-    def authenticated(self) -> bool:
-        # 检查用户是否已登录
-        ...
-
-    def quota_left(self) -> int:
-        # 返回剩余免费额度；无限制返回 -1
-        ...
-
-    def execute(self, task: str, context=None) -> Result:
-        # 调用平台执行任务，返回统一格式的 Result
-        ...
+    def execute(self, task, context=None):
+        br = self._run_bridge(task)
+        return self._bridge_to_result(br, self.name)
 ```
 
-### 第三步：注册到 Registry
-
-在 `cli/main.py` 的 `_build_registry()` 中添加：
+### Step 3: 注册
 
 ```python
-from providers.your_platform.provider import YourPlatformProvider
-registry.register(YourPlatformProvider())
+# cli/main.py → _build_registry()
+from providers.your_platform.provider import YourProvider
+registry.register(YourProvider())
 ```
 
-### 第四步：添加路由规则
-
-在 `config/router_rules.yaml` 中，把你的 Provider 加到对应任务类型下。
-
-### 第五步：测试
+### 验证
 
 ```bash
-# 单独测试你的 Provider
-python -m cli.main ask "测试任务"
-
-# 跑全部测试
-python tests/test_skeleton.py
+python tests/validate_provider.py
 ```
 
-### 第六步：提交 PR
+## Bridge 选择
 
+| 场景 | Bridge | 示例 |
+|------|--------|------|
+| 平台提供 CLI 工具 | `CLIBridge` | Gemini CLI, QODER |
+| 平台提供 HTTP API | `APIBridge` | OpenAI API, Claude API |
+| 测试 / 骨架验证 | `FakeBridge` | DemoProvider |
+| GUI 自动化 | `GUIBridge` (V0.3) | Marvis |
+
+## Capability 标签
+
+在 `core/capabilities.py` 中定义。如果现有标签不覆盖你的场景，可以新增：
+
+```python
+# core/capabilities.py
+CAPABILITIES = {
+    ...
+    "image.generate": "生成图片",  # 新增
+}
 ```
-1. Fork 仓库
-2. 创建分支：git checkout -b add-your-platform
-3. 提交：git commit -m "Add YourPlatform provider"
-4. 推送：git push origin add-your-platform
-5. 在 GitHub 上创建 Pull Request
-```
 
----
-
-## 代码规范
+## Code Style
 
 - Python 3.11+
-- 类型标注必填（用 `typing` 模块）
-- 每个方法必须有 docstring
-- Result 格式不可修改（这是全项目的契约）
-- Provider 接口不可修改（新增参数必须带默认值）
+- 类型标注必填
+- dataclass 优先（不引入 Pydantic）
+- 零额外依赖（标准库优先）
+- Windows 兼容（不用 emoji 以外的非 ASCII 字符在代码中）
 
----
-
-## 目录结构
+## Directory Structure
 
 ```
 ai-hub/
-├── docs/               # 规划文档
-├── providers/          # Provider 适配器
-│   ├── base/           # (预留)
-│   ├── demo/           # Demo Provider（骨架验证用）
-│   ├── qoder/          # QODER 适配器
-│   ├── gemini/         # Gemini CLI 适配器
-│   └── qclaw/          # QClaw 适配器
-├── router/             # 路由层
-├── core/               # 核心数据结构（Provider 基类、Result、Registry）
+├── core/               # 核心代码（稳定接口）
+│   ├── provider.py     # Provider 基类 + ProviderMetadata
+│   ├── bridge.py       # Bridge 层（CLI / API / Fake）
+│   ├── capabilities.py # 能力标签定义 + 关键词映射
+│   ├── registry.py     # Provider 注册中心
+│   ├── result.py       # 统一结果格式
+│   └── history.py      # 历史记录
+├── router/             # 路由器
+│   └── router.py       # Task → Capability → Provider
+├── providers/          # Provider 适配器（每个平台一个目录）
+│   ├── demo/           # DemoProvider (FakeBridge)
+│   ├── qoder/          # QODER (CLIBridge)
+│   ├── gemini/         # Gemini CLI (CLIBridge)
+│   └── openai_api/     # OpenAI API (APIBridge)
 ├── cli/                # CLI 入口
-├── config/             # 路由规则、关键词映射
-├── history/            # 运行时任务记录
-├── tests/              # 测试
-├── pyproject.toml
-├── .gitignore
-└── README.md
+├── config/             # 配置文件
+├── tests/              # 测试 + 验证脚本
+└── docs/               # 文档
 ```
-
----
-
-## 版本规范
-
-遵循 [Semantic Versioning](https://semver.org/)：
-
-- **MAJOR**：Provider 接口不兼容的修改（尽量不做）
-- **MINOR**：新增 Provider、新增功能（向后兼容）
-- **PATCH**：Bug 修复
-
----
-
-## 有问题？
-
-- 提 [Issue](https://github.com/<your-org>/ai-hub/issues)
-- 讨论区提问
-- 查看 [DESIGN.md](docs/DESIGN.md) 了解设计决策
