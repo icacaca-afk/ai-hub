@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from core.provider import Provider
 from core.registry import CapabilityRegistry
 from core.result import Result
@@ -24,8 +26,10 @@ class Router:
     API Stability: Stable
     """
 
-    def __init__(self, registry: CapabilityRegistry):
+    def __init__(self, registry: CapabilityRegistry,
+                 quota_manager: Optional[object] = None):
         self.registry = registry
+        self.quota = quota_manager
 
     def route(self, task: Task) -> Provider | None:
         """为 Task 选择最合适的 Provider。
@@ -40,7 +44,10 @@ class Router:
         candidates = self.registry.find_available_by_any(caps)
 
         if candidates:
-            return candidates[0]
+            # QuotaManager 过滤：跳过额度耗尽的 Provider
+            for p in candidates:
+                if self.quota is None or not self.quota.exhausted(p.name):
+                    return p
 
         # 所有候选都不可用，尝试 fallback
         all_matches = self.registry.find_by_any_capability(caps)
@@ -48,7 +55,8 @@ class Router:
             for fb_name in p.fallback:
                 fb = self.registry.get(fb_name)
                 if fb and fb.available():
-                    return fb
+                    if self.quota is None or not self.quota.exhausted(fb.name):
+                        return fb
 
         return None
 
@@ -74,9 +82,27 @@ class Router:
                 metadata={"capabilities": task.capabilities, "task_id": task.task_id},
             )
 
+        # 执行前检查配额
+        if self.quota and self.quota.exhausted(provider.name):
+            # 不应到达这里（route 已过滤），但防御性检查
+            return Result(
+                provider=provider.name,
+                status="failed",
+                output="",
+                error=f"Quota exhausted for {provider.name}",
+                metadata={"capabilities": task.capabilities, "task_id": task.task_id,
+                           "fallback_reason": "quota_exhausted"},
+            )
+
         # Provider 只负责选 Bridge，Router 负责执行
         bridge = provider.select_bridge(task)
         br = bridge.run(task)
+
+        # 成功时扣减配额
+        if br.success and self.quota:
+            self.quota.ensure(provider.name, provider.metadata.quota_total,
+                             provider.metadata.quota_type)
+            self.quota.consume(provider.name, task_id=task.task_id)
 
         # Router 负责 BridgeResult → Result 转换
         return Result(

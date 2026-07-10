@@ -62,7 +62,9 @@ def cmd_ask(args: list[str]) -> None:
 
     text = " ".join(args)
     registry = _build_registry()
-    router = Router(registry)
+    from core.quota import QuotaManager
+    quota = QuotaManager()
+    router = Router(registry, quota_manager=quota)
     history = HistoryStore()
 
     # 创建 Task
@@ -143,18 +145,34 @@ def cmd_status(args: list[str]) -> None:
 
 
 def cmd_quota(args: list[str]) -> None:
-    registry = _build_registry()
-    providers = registry.all()
+    from core.quota import QuotaManager
 
-    print("AI Hub — Quota Status\n")
-    for p in providers:
-        info = p.quota_info()
-        remaining = info["remaining"]
-        total = info["total"]
-        if remaining == -1:
-            print(f"  {p.display_name:<14} Unlimited ({type(p.bridge).__name__})")
+    if args and args[0] == "log":
+        qm = QuotaManager()
+        provider = args[1] if len(args) > 1 else None
+        logs = qm.log(provider)
+        if not logs:
+            print("No quota log entries.")
+            return
+        print(f"{'Time':<22} {'Provider':<16} {'Amt':>3} {'Rem':>6}")
+        print("-" * 51)
+        for l in logs:
+            ts = l["created_at"][:19].replace("T", " ")
+            print(f"{ts:<22} {l['provider_name']:<16} {l['amount']:>3} {l['remaining']:>6}")
+        return
+
+    if args and args[0] == "reset":
+        qm = QuotaManager()
+        if len(args) > 1:
+            qm.reset(args[1])
+            print(f"Quota reset for: {args[1]}")
         else:
-            print(f"  {p.display_name:<14} {remaining}/{total} remaining ({info['type']})")
+            qm.reset_all()
+            print("All quotas reset.")
+        return
+
+    qm = QuotaManager()
+    print(qm.summary())
 
 
 def cmd_caps(args: list[str]) -> None:
