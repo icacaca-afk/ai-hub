@@ -43,16 +43,33 @@ class MarvisBridge(Bridge):
             return None
 
     def _find_window(self, auto):
-        """查找 Marvis 主窗口。"""
-        # 先精确匹配
-        w = auto.WindowControl(Name=self.app_name, searchDepth=1)
-        if w.Exists(0):
-            return w
+        """查找 Marvis 主窗口。
 
-        # 模糊匹配（含 "Marvis" 子串）
-        for w in auto.GetRootControl().GetChildren():
-            if self.app_name.lower() in (w.Name or "").lower():
-                return w
+        uiautomation 的 GetRootControl().GetChildren() 只返回 Desktop 直接子窗口，
+        很多应用窗口（尤其是 Electron 应用）不在其中。改用 Win32 FindWindow。
+        """
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, self.app_name)
+        if hwnd:
+            return auto.ControlFromHandle(hwnd)
+
+        # 模糊匹配
+        def enum_callback(hwnd, lParam):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if self.app_name.lower() in buf.value.lower():
+                    results.append(hwnd)
+            return True
+
+        results = []
+        CALLBACK = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        user32.EnumWindows(CALLBACK(enum_callback), 0)
+
+        if results:
+            return auto.ControlFromHandle(results[0])
 
         return None
 
