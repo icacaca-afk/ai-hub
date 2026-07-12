@@ -158,6 +158,14 @@ def test_zero_modification_kpi():
     print("   真正的验证：'git diff main -- core/ bridge.py router/' 应为空（除 ADR 显式批准）")
 
 
+def test_marvis_provider_contract():
+    """Marvis Provider (MarvisBridge) 必须通过 Contract。"""
+    from providers.marvis.provider import MarvisProvider
+    errors = check_contract(MarvisProvider)
+    assert not errors, f"MarvisProvider contract violations: {errors}"
+    print("✅ test_marvis_provider_contract passed")
+
+
 def test_capability_metadata_consistency():
     """每个 Provider 声明的 capability 必须存在于 CAPABILITIES 注册表。"""
     from core.capabilities import CAPABILITIES
@@ -166,7 +174,9 @@ def test_capability_metadata_consistency():
     from providers.gemini.provider import GeminiCLIProvider
     from providers.openai_api.provider import OpenAIAPIProvider
 
-    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider]
+    from providers.marvis.provider import MarvisProvider
+
+    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider, MarvisProvider]
     for p_class in providers:
         for cap in p_class.metadata.capabilities:
             assert cap in CAPABILITIES, (
@@ -183,6 +193,7 @@ def run_all():
         test_qoder_provider_contract,
         test_gemini_provider_contract,
         test_openai_provider_contract,
+        test_marvis_provider_contract,
         test_zero_modification_kpi,
         test_capability_metadata_consistency,
     ]
