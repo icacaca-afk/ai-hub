@@ -169,7 +169,6 @@ class MarvisBridge(Bridge):
         # ── 5. Wait for response via clipboard polling ─────────
         #     Click conversation area → select-all → copy
         #     After Enter, focus stays in input box; click upper half first.
-        import ctypes.windll
         prev = ""
         idle_count = 0
         deadline = start + timeout
