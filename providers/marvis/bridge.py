@@ -163,8 +163,13 @@ class MarvisBridge(Bridge):
         time.sleep(0.3)
 
         # ── 4. Send message ────────────────────────────────────
-        _send_key(VK_RETURN)
-        time.sleep(0.3)
+        #     Use keybd_event for Enter (more reliable than SendInput in some apps)
+        _activate_window(hwnd)  # ensure focus
+        time.sleep(0.1)
+        user32.keybd_event(VK_RETURN, 0, 0, 0)
+        time.sleep(0.05)
+        user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.5)
 
         # ── 5. Wait for response via clipboard polling ─────────
         #     Click conversation area → select-all → copy
