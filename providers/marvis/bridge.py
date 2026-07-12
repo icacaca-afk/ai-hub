@@ -118,20 +118,20 @@ def _clipboard_get() -> str:
 
 
 def _clipboard_set(text: str):
-    """Write text to clipboard."""
+    """Write text to clipboard via WM_COPYDATA / standard Windows API."""
     CF_UNICODETEXT = 13
+    if not text:
+        return
+    encoded = (text + '\x00').encode('utf-16-le')
     if not ctypes.windll.user32.OpenClipboard(0):
         return
     try:
         ctypes.windll.user32.EmptyClipboard()
-        size = (len(text) + 1) * 2
-        hmem = ctypes.windll.kernel32.GlobalAlloc(0x0002, size)  # GMEM_MOVEABLE
+        hmem = ctypes.windll.kernel32.GlobalAlloc(0x0002, len(encoded))  # GMEM_MOVEABLE
         if hmem:
             p = ctypes.windll.kernel32.GlobalLock(hmem)
             if p:
-                # copy unicode string to global memory
-                buf = (ctypes.c_wchar * len(text))(*text)
-                ctypes.memmove(p, buf, size - 2)
+                ctypes.memmove(p, encoded, len(encoded))
                 ctypes.windll.kernel32.GlobalUnlock(hmem)
             ctypes.windll.user32.SetClipboardData(CF_UNICODETEXT, hmem)
     finally:
