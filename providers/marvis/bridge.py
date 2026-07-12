@@ -98,14 +98,18 @@ def _ctrl_key(vk_char: int):
 
 
 def _clipboard_get() -> str:
-    """Read text from clipboard via PowerShell."""
+    """Read text from clipboard."""
     import subprocess
     try:
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-Clipboard | Out-String -NoNewline"],
-            capture_output=True, text=True, timeout=5,
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard"],
+            capture_output=True, timeout=5,
         )
-        return r.stdout.rstrip('\n').rstrip('\r')
+        # PowerShell stdout is UTF-16LE with BOM
+        raw = r.stdout
+        if raw.startswith(b'\xff\xfe'):
+            raw = raw[2:]
+        return raw.decode('utf-16-le', errors='replace').rstrip('\r\n').rstrip('\n').rstrip('\r')
     except Exception:
         return ""
 
@@ -115,7 +119,7 @@ def _clipboard_set(text: str):
     import subprocess
     try:
         subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $input"],
+            "clip.exe",
             input=text, text=True, timeout=5,
         )
     except Exception:
