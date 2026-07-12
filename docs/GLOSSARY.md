@@ -16,8 +16,8 @@
 | **CapabilityRegistry** | Provider 注册与查询中心。维护 Capability → Provider 的映射。Router 通过 CapabilityRegistry 查找 Provider，不直接持有 Provider 列表。 | `core/registry.py` → `CapabilityRegistry` |
 | **Router** | 根据 Task 关键词匹配出 Capability 列表，通过 CapabilityRegistry 查找可用 Provider，选择最优并执行。**Router 不知道具体 Provider 的存在，只知道 Capability。** | `router/router.py` → `Router` |
 | **Session** | 一个跨多次 Task 的上下文容器。由 SessionManager 创建、Checkpoint 持久化、Resume 恢复、Destroy 释放。**所有 Bridge 都有 Session 概念，不只是 GUIBridge。** Session 不代替 Task.context；Task.context 是单次输入，Session 是跨 Task 状态。 | `core/session.py` → `Session` dataclass |
-| **SessionManager** | Session 的创建/查询/Checkpoint/Resume/Destroy 中心。**不修改 Router**。Bridge 可以请求 Session（用于跨调用状态），但 Router 不感知。 | `core/session.py` → `SessionManager` |
-| **RuntimeRegistry** | Session 创建时绑定一个 Bridge 会话（API/CLI/GUI 三类不同）。RuntimeRegistry 维护 Session → Bridge 的映射，Session.destroy() 时通知 Bridge 释放。**不修改 Router，不修改 Provider。** | `core/runtime_registry.py` → `RuntimeRegistry` |
+| **SessionManager** | Session 的创建/查询/Checkpoint/Resume/Destroy 中心。**不修改 Router**。Bridge 可以请求 Session（用于跨调用状态），但 Router 不感知。SessionManager.destroy() 负责调用 RuntimeRegistry.unbind()。 | `core/session.py` → `SessionManager` |
+| **RuntimeRegistry** | Session 创建时绑定一个 Bridge 会话（API/CLI/GUI 三类不同）。RuntimeRegistry 维护 Session → Bridge 的映射。SessionManager.destroy() 时通知 RuntimeRegistry 释放绑定。**不修改 Router，不修改 Provider。** | `core/runtime_registry.py` → `RuntimeRegistry` |
 
 ## 关系链
 
