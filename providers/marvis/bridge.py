@@ -1,10 +1,14 @@
-"""Marvis UIA Bridge — 通过 Windows UIA 操控 Marvis 桌面应用。
+"""Marvis Win32 Bridge — 通过键盘模拟 + 剪贴板操控桌面应用。
 
 继承 Bridge 基类，不修改 core/bridge.py。
-使用 uiautomation 库直接读写 UI 元素，避免坐标操作。
+Marvis 是 Qt 应用，不暴露 UIA 内部控件树 → 用 Win32 键盘事件。
+此策略通用：Electron / Qt / 原生 Win32 均适用。
+
+API Stability: Experimental (V0.4)
 """
 from __future__ import annotations
 
+import ctypes
 import time
 import re
 from typing import Optional
@@ -12,307 +16,252 @@ from typing import Optional
 from core.bridge import Bridge, BridgeResult
 from core.task import Task
 
+# ── Win32 constants ──────────────────────────────────────────────
+SW_RESTORE = 9
+VK_CONTROL = 0x11
+VK_V = 0x56
+VK_A = 0x41
+VK_C = 0x43
+VK_RETURN = 0x0D
+VK_BACK = 0x08
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_EXTENDEDKEY = 0x0001
+
+user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+
+# ── Win32 helpers ─────────────────────────────────────────────────
+
+def _find_window_by_title(title: str) -> Optional[int]:
+    """Find window by exact title match. Returns hwnd or None."""
+    hwnd = user32.FindWindowW(None, title)
+    if hwnd:
+        return hwnd
+    # enum all windows, case-insensitive match
+    results = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _cb(h, _):
+        n = user32.GetWindowTextLengthW(h)
+        if n > 0:
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(h, buf, n + 1)
+            if title.lower() in buf.value.lower():
+                results.append(h)
+        return True
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    return results[0] if results else None
+
+
+def _activate_window(hwnd: int):
+    """Bring window to foreground."""
+    user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(0.2)
+
+
+def _send_key(vk: int, up: bool = False, extended: bool = False):
+    """Send a single key event via SendInput (preferred over keybd_event)."""
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                    ("dwFlags", ctypes.c_uint), ("time", ctypes.c_uint),
+                    ("dwExtraInfo", ctypes.c_void_p)]
+    class INPUT(ctypes.Structure):
+        class _U(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+        _anonymous_ = ("u",)
+        _fields_ = [("type", ctypes.c_uint), ("u", _U)]
+    flags = 0
+    if up:
+        flags |= KEYEVENTF_KEYUP
+    if extended:
+        flags |= KEYEVENTF_EXTENDEDKEY
+    inp = INPUT(type=1, ki=KEYBDINPUT(wVk=vk, wScan=0, dwFlags=flags, time=0, dwExtraInfo=None))
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+
+def _send_combo(keys: list[tuple[int, bool]]):
+    """Send a key combination. keys = [(VK, extended), ...].
+    Presses all in order, releases in reverse."""
+    for vk, ext in keys:
+        _send_key(vk, up=False, extended=ext)
+        time.sleep(0.02)
+    for vk, ext in reversed(keys):
+        _send_key(vk, up=True, extended=ext)
+        time.sleep(0.02)
+
+
+def _ctrl_key(vk_char: int):
+    """Send Ctrl + key."""
+    _send_combo([(VK_CONTROL, False), (vk_char, False)])
+    time.sleep(0.1)
+
+
+def _clipboard_get() -> str:
+    """Read text from clipboard. Returns '' on failure."""
+    CF_UNICODETEXT = 13
+    if not ctypes.windll.user32.OpenClipboard(0):
+        return ""
+    try:
+        h = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return ""
+        p = ctypes.windll.kernel32.GlobalLock(h)
+        if not p:
+            return ""
+        try:
+            return ctypes.wstring_at(p)  # type: ignore[attr-defined]
+        finally:
+            ctypes.windll.kernel32.GlobalUnlock(p)
+    finally:
+        ctypes.windll.user32.CloseClipboard()
+
+
+def _clipboard_set(text: str):
+    """Write text to clipboard."""
+    CF_UNICODETEXT = 13
+    if not ctypes.windll.user32.OpenClipboard(0):
+        return
+    try:
+        ctypes.windll.user32.EmptyClipboard()
+        size = (len(text) + 1) * 2
+        hmem = ctypes.windll.kernel32.GlobalAlloc(0x0002, size)  # GMEM_MOVEABLE
+        if hmem:
+            p = ctypes.windll.kernel32.GlobalLock(hmem)
+            if p:
+                # copy unicode string to global memory
+                buf = (ctypes.c_wchar * len(text))(*text)
+                ctypes.memmove(p, buf, size - 2)
+                ctypes.windll.kernel32.GlobalUnlock(hmem)
+            ctypes.windll.user32.SetClipboardData(CF_UNICODETEXT, hmem)
+    finally:
+        ctypes.windll.user32.CloseClipboard()
+
+
+# ── MarvisBridge ──────────────────────────────────────────────────
 
 class MarvisBridge(Bridge):
-    """通过 Windows UI Automation 与 Marvis 桌面 AI 交互。
+    """通过 Win32 键盘模拟 + 剪贴板与 Marvis 桌面 AI 交互。
 
-    Marvis 通常运行在系统托盘或独立窗口中。
-    Bridge 查找窗口、定位输入框/发送按钮/输出区域，
-    输入任务内容，等待 AI 响应，提取输出文本。
-
-    API Stability: Experimental (V0.4)
+    策略：粘贴 → 回车 → 等待 → 全选复制 → 读剪贴板。
+    不依赖 UIA 控件树（Marvis 是 Qt 应用，不暴露内部控件）。
     """
 
     def __init__(
         self,
         app_name: str = "Marvis",
         timeout: int = 300,
-        poll_interval: float = 1.0,
-        max_idle_polls: int = 5,
+        poll_interval: float = 2.0,
+        max_idle_polls: int = 8,
     ):
         self.app_name = app_name
         self.timeout = timeout
         self.poll_interval = poll_interval
-        self.max_idle_polls = max_idle_polls  # 连续 N 次输出不变 = 完成
+        self.max_idle_polls = max_idle_polls
 
-    def _import_uia(self):
-        try:
-            import uiautomation as auto
-            return auto
-        except ImportError:
-            return None
-
-    def _find_window(self, auto):
-        """查找 Marvis 主窗口。
-
-        uiautomation 的 GetRootControl().GetChildren() 只返回 Desktop 直接子窗口，
-        很多应用窗口（尤其是 Electron 应用）不在其中。改用 Win32 FindWindow。
-        """
-        import ctypes
-        user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, self.app_name)
-        if hwnd:
-            return auto.ControlFromHandle(hwnd)
-
-        # 模糊匹配
-        def enum_callback(hwnd, lParam):
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length > 0:
-                buf = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(hwnd, buf, length + 1)
-                if self.app_name.lower() in buf.value.lower():
-                    results.append(hwnd)
-            return True
-
-        results = []
-        CALLBACK = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-        user32.EnumWindows(CALLBACK(enum_callback), 0)
-
-        if results:
-            return auto.ControlFromHandle(results[0])
-
-        return None
-
-    def _find_input_control(self, window, auto):
-        """在窗口中查找文本输入框。
-
-        策略：查找 EditControl，选可聚焦的。
-        """
-        edits = []
-        def collect_edits(ctrl, depth=0):
-            if depth > 15:
-                return
-            if ctrl.ControlTypeName == "EditControl" and ctrl.IsEnabled:
-                edits.append(ctrl)
-            try:
-                for child in ctrl.GetChildren():
-                    collect_edits(child, depth + 1)
-            except Exception:
-                pass
-
-        collect_edits(window)
-        if not edits:
-            return None
-        # 选最大的 EditControl（主输入框通常最大）
-        return max(edits, key=lambda e: (e.BoundingRectangle.width() * e.BoundingRectangle.height()))
-
-    def _find_send_button(self, window, auto):
-        """查找发送按钮。"""
-        buttons = []
-        def collect_buttons(ctrl, depth=0):
-            if depth > 15:
-                return
-            if ctrl.ControlTypeName == "ButtonControl" and ctrl.IsEnabled:
-                name = (ctrl.Name or "").lower()
-                if any(kw in name for kw in ["发送", "send", "提交", "submit", "→", "➤"]):
-                    buttons.append(ctrl)
-            try:
-                for child in ctrl.GetChildren():
-                    collect_buttons(child, depth + 1)
-            except Exception:
-                pass
-
-        collect_buttons(window)
-        return buttons[0] if buttons else None
-
-    def _find_output_area(self, window, auto):
-        """查找输出/对话区域。
-
-        策略：找最大的只读 TextControl 区域。
-        """
-        texts = []
-        def collect_texts(ctrl, depth=0):
-            if depth > 15:
-                return
-            if ctrl.ControlTypeName == "TextControl" or ctrl.ControlTypeName == "EditControl":
-                if ctrl.IsEnabled:
-                    texts.append(ctrl)
-            try:
-                for child in ctrl.GetChildren():
-                    collect_texts(child, depth + 1)
-            except Exception:
-                pass
-
-        collect_texts(window)
-        if not texts:
-            return None
-        # 选最大的（对话区域通常最大）
-        return max(texts, key=lambda t: (t.BoundingRectangle.width() * t.BoundingRectangle.height()))
-
-    def _get_text(self, control) -> str:
-        """从 UIA 控件提取文本。"""
-        if control is None:
-            return ""
-        # 尝试多种方式获取文本
-        for attr in ("Name", "ValuePattern.Value", "TextPattern.DocumentRange.GetText"):
-            try:
-                parts = attr.split(".")
-                val = control
-                for p in parts:
-                    if p.endswith("()"):
-                        val = getattr(val, p[:-2])()
-                    else:
-                        val = getattr(val, p)
-                if val:
-                    return str(val).strip()
-            except Exception:
-                pass
-        return ""
-
-    def _set_text(self, control, text: str) -> bool:
-        """向 UIA 控件设置文本。"""
-        if control is None:
-            return False
-        try:
-            # 方法 1: ValuePattern.SetValue
-            value_pattern = control.GetPattern(control.PatternId.ValuePatternId)
-            if callable(value_pattern.SetValue):
-                value_pattern.SetValue(text)
-                return True
-        except Exception:
-            pass
-        try:
-            # 方法 2: SendKeys 逐个字符模拟输入
-            control.SetFocus()
-            import uiautomation as auto
-            control.SendKeys(text)
-            return True
-        except Exception:
-            pass
-        return False
+    def _is_window_alive(self, hwnd: int) -> bool:
+        """Check if window handle is still valid."""
+        return bool(user32.IsWindow(hwnd))
 
     def run(self, task: Task, **kwargs) -> BridgeResult:
-        auto = self._import_uia()
-        if auto is None:
-            return BridgeResult(
-                success=False, output="",
-                error="uiautomation not installed. pip install uiautomation"
-            )
-
         timeout = kwargs.get("timeout", self.timeout)
         start = time.time()
 
-        try:
-            # 1. 找窗口
-            window = self._find_window(auto)
-            if window is None:
-                return BridgeResult(
-                    success=False, output="",
-                    error=f"Window not found: {self.app_name}. Is Marvis running?"
-                )
-
-            # 2. 找输入框
-            input_ctrl = self._find_input_control(window, auto)
-            if input_ctrl is None:
-                return BridgeResult(
-                    success=False, output="",
-                    error="Input control not found in Marvis window"
-                )
-
-            # 3. 找发送按钮
-            send_btn = self._find_send_button(window, auto)
-
-            # 4. 记录输出区域当前文本（用于检测变化）
-            output_ctrl = self._find_output_area(window, auto)
-            prev_text = self._get_text(output_ctrl) if output_ctrl else ""
-
-            # 5. 输入任务内容
-            content = task.content
-            if not self._set_text(input_ctrl, content):
-                # 降级：用 SendKeys 输入
-                try:
-                    input_ctrl.SetFocus()
-                    time.sleep(0.1)
-                    input_ctrl.SendKeys(content)
-                except Exception as e:
-                    return BridgeResult(
-                        success=False, output="",
-                        error=f"Failed to input text: {e}"
-                    )
-
-            # 6. 点击发送
-            if send_btn:
-                try:
-                    send_btn.Click()
-                except Exception:
-                    try:
-                        # 降级：按 Enter
-                        input_ctrl.SendKeys("{Enter}")
-                    except Exception:
-                        pass
-            else:
-                # 没有发送按钮，尝试按 Ctrl+Enter 或 Enter
-                try:
-                    input_ctrl.SendKeys("{Enter}")
-                except Exception:
-                    pass
-
-            # 7. 等待响应完成（轮询输出变化）
-            idle_count = 0
-            output_text = prev_text
-            deadline = start + timeout
-
-            while time.time() < deadline:
-                time.sleep(self.poll_interval)
-
-                current = ""
-                try:
-                    output_ctrl = self._find_output_area(window, auto)
-                    current = self._get_text(output_ctrl) if output_ctrl else ""
-                except Exception:
-                    pass
-
-                if current == output_text:
-                    idle_count += 1
-                    if idle_count >= self.max_idle_polls and current and len(current) > len(prev_text):
-                        break
-                else:
-                    output_text = current
-                    idle_count = 0
-
-            # 8. 提取新增内容
-            if output_text and prev_text:
-                # 尝试去除旧内容，取新增部分
-                new_output = output_text
-                if output_text.startswith(prev_text):
-                    new_output = output_text[len(prev_text):].strip()
-                elif prev_text in output_text:
-                    idx = output_text.rfind(prev_text)
-                    new_output = output_text[idx + len(prev_text):].strip()
-            else:
-                new_output = output_text
-
-            duration_ms = int((time.time() - start) * 1000)
-
-            return BridgeResult(
-                success=bool(new_output.strip()),
-                output=new_output.strip() or output_text.strip(),
-                duration_ms=duration_ms,
-            )
-
-        except Exception as e:
-            duration_ms = int((time.time() - start) * 1000)
+        # ── 1. Find & activate window ──────────────────────────
+        hwnd = _find_window_by_title(self.app_name)
+        if hwnd is None:
             return BridgeResult(
                 success=False, output="",
-                error=f"MarvisBridge error: {e}",
-                duration_ms=duration_ms,
+                error=f"Window not found: {self.app_name}. Is Marvis running?",
             )
+        _activate_window(hwnd)
+
+        # ── 2. Save current clipboard ──────────────────────────
+        saved = _clipboard_get()
+
+        # ── 3. Paste task content ──────────────────────────────
+        _clipboard_set(task.content)
+        time.sleep(0.1)
+        _ctrl_key(VK_V)  # Ctrl+V
+        time.sleep(0.3)
+
+        # ── 4. Send message ────────────────────────────────────
+        _send_key(VK_RETURN)
+        time.sleep(0.3)
+
+        # ── 5. Wait for response via clipboard polling ─────────
+        #     Periodically select-all + copy to capture response
+        prev = ""
+        idle_count = 0
+        deadline = start + timeout
+        output = ""
+
+        while time.time() < deadline:
+            time.sleep(self.poll_interval)
+
+            if not self._is_window_alive(hwnd):
+                return BridgeResult(
+                    success=False, output=output,
+                    error="Marvis window closed during wait",
+                )
+
+            # activate, select-all, copy
+            _activate_window(hwnd)
+            time.sleep(0.05)
+            _ctrl_key(VK_A)     # Ctrl+A : select all
+            time.sleep(0.1)
+            _ctrl_key(VK_C)     # Ctrl+C : copy
+            time.sleep(0.2)
+
+            current = _clipboard_get()
+
+            if current == prev:
+                idle_count += 1
+                if idle_count >= self.max_idle_polls and current.strip():
+                    # response stabilized
+                    output = current
+                    break
+            else:
+                prev = current
+                idle_count = 0
+
+        else:
+            # timed out — use whatever we have
+            output = prev
+
+        # ── 6. Restore clipboard ───────────────────────────────
+        _clipboard_set(saved)
+
+        # ── 7. Extract just the response ───────────────────────
+        #     The clipboard will contain the full conversation.
+        #     Strip the user's message from the front.
+        response = self._extract_response(output, task.content)
+        duration_ms = int((time.time() - start) * 1000)
+
+        return BridgeResult(
+            success=bool(response.strip()),
+            output=response.strip() or output.strip(),
+            duration_ms=duration_ms,
+        )
+
+    def _extract_response(self, full_text: str, sent_message: str) -> str:
+        """Extract the last AI response from the full conversation text."""
+        if not full_text.strip():
+            return ""
+        # If the full text contains the sent message, take everything after it
+        if sent_message in full_text:
+            parts = full_text.split(sent_message, 1)
+            if len(parts) > 1:
+                return parts[-1].strip()
+        # Otherwise, return as-is (may reflect a different message layout)
+        return full_text.strip()
 
     def check_available(self) -> bool:
-        """检查 Marvis 窗口是否存在且可交互。"""
-        auto = self._import_uia()
-        if auto is None:
-            return False
         try:
-            window = self._find_window(auto)
-            if window is None:
-                return False
-            # 检查是否有输入框
-            input_ctrl = self._find_input_control(window, auto)
-            return input_ctrl is not None
+            hwnd = _find_window_by_title(self.app_name)
+            return hwnd is not None
         except Exception:
             return False
 
     def check_auth(self) -> bool:
-        """GUI 认证状态由应用自身管理，窗口存在即可。"""
         return self.check_available()
