@@ -99,29 +99,18 @@ def _ctrl_key(vk_char: int):
 
 def _clipboard_get() -> str:
     """Read text from clipboard."""
-    import subprocess
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard"],
-            capture_output=True, timeout=5,
-        )
-        # PowerShell stdout is UTF-16LE with BOM
-        raw = r.stdout
-        if raw.startswith(b'\xff\xfe'):
-            raw = raw[2:]
-        return raw.decode('utf-16-le', errors='replace').rstrip('\r\n').rstrip('\n').rstrip('\r')
+        import pyperclip
+        return pyperclip.paste() or ""
     except Exception:
         return ""
 
 
 def _clipboard_set(text: str):
-    """Write text to clipboard via clip.exe."""
-    import subprocess
+    """Write text to clipboard."""
     try:
-        subprocess.run(
-            "clip.exe",
-            input=text, text=True, timeout=5,
-        )
+        import pyperclip
+        pyperclip.copy(text)
     except Exception:
         pass
 
