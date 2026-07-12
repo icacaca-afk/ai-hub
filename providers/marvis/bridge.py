@@ -153,25 +153,40 @@ class MarvisBridge(Bridge):
             )
         _activate_window(hwnd)
 
-        # ── 2. Save current clipboard ──────────────────────────
+        # ── 2. Click input area (lower portion of window) ─────
+        #     Qt apps need a click to focus the text input
+        rect = ctypes.create_string_buffer(16)
+        ctypes.windll.user32.GetWindowRect(hwnd, rect)
+        w_left = int.from_bytes(rect[0:4], 'little')
+        w_top = int.from_bytes(rect[4:8], 'little')
+        w_right = int.from_bytes(rect[8:12], 'little')
+        w_bottom = int.from_bytes(rect[12:16], 'little')
+        # Input box is usually at bottom ~15% for chat apps
+        input_x = (w_left + w_right) // 2
+        input_y = w_bottom - (w_bottom - w_top) // 6
+        ctypes.windll.user32.SetCursorPos(input_x, input_y)
+        time.sleep(0.05)
+        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+        time.sleep(0.2)
+
+        # ── 3. Save current clipboard ──────────────────────────
         saved = _clipboard_get()
 
-        # ── 3. Paste task content ──────────────────────────────
+        # ── 4. Paste task content ──────────────────────────────
         _clipboard_set(task.content)
         time.sleep(0.1)
         _ctrl_key(VK_V)  # Ctrl+V
         time.sleep(0.3)
 
-        # ── 4. Send message ────────────────────────────────────
+        # ── 5. Send message ────────────────────────────────────
         #     Use keybd_event for Enter (more reliable than SendInput in some apps)
-        _activate_window(hwnd)  # ensure focus
-        time.sleep(0.1)
         user32.keybd_event(VK_RETURN, 0, 0, 0)
         time.sleep(0.05)
         user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
         time.sleep(0.5)
 
-        # ── 5. Wait for response via clipboard polling ─────────
+        # ── 6. Wait for response via clipboard polling ─────────
         #     Click conversation area → select-all → copy
         #     After Enter, focus stays in input box; click upper half first.
         prev = ""
@@ -179,14 +194,7 @@ class MarvisBridge(Bridge):
         deadline = start + timeout
         output = ""
 
-        # Get window rect for clicking conversation area
-        rect = ctypes.create_string_buffer(16)
-        ctypes.windll.user32.GetWindowRect(hwnd, rect)
-        w_left = int.from_bytes(rect[0:4], 'little')
-        w_top = int.from_bytes(rect[4:8], 'little')
-        w_right = int.from_bytes(rect[8:12], 'little')
-        w_bottom = int.from_bytes(rect[12:16], 'little')
-        # Click upper 1/3 for conversation area, horizontal center
+        # Conversation area = upper 1/3 for clicking during polling
         conv_x = (w_left + w_right) // 2
         conv_y = w_top + (w_bottom - w_top) // 3
 
