@@ -187,6 +187,103 @@ def cmd_caps(args: list[str]) -> None:
         print(f"  {cap:<20} {desc:<12} -> {provider_names}")
 
 
+def cmd_session(args: list[str]) -> None:
+    from core.session import SessionManager
+
+    if not args:
+        print("Usage:")
+        print('  ai-hub session list [provider]   List sessions')
+        print('  ai-hub session create <provider>  Create a session')
+        print('  ai-hub session show <id>          Show session details')
+        print('  ai-hub session checkpoint <id>    Checkpoint a session')
+        print('  ai-hub session resume <id>        Resume a session')
+        print('  ai-hub session destroy <id>       Destroy a session')
+        return
+
+    sub = args[0]
+    mgr = SessionManager()
+
+    if sub == "list":
+        provider = args[1] if len(args) > 1 else None
+        sessions = mgr.list(provider)
+        if not sessions:
+            print("No sessions.")
+            return
+        print(f"{'ID':<12} {'Provider':<14} {'Status':<14} {'Updated':<20}")
+        print("-" * 62)
+        for s in sessions:
+            sid = s.session_id[:8]
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(s.updated_at))
+            print(f"{sid:<12} {s.provider_name:<14} {s.status:<14} {ts:<20}")
+
+    elif sub == "create":
+        if len(args) < 2:
+            print("Usage: ai-hub session create <provider>")
+            sys.exit(1)
+        s = mgr.create(args[1])
+        print(f"Created session: {s.session_id}")
+        print(f"  Provider: {s.provider_name}")
+        print(f"  Status:   {s.status}")
+
+    elif sub == "show":
+        if len(args) < 2:
+            print("Usage: ai-hub session show <id>")
+            sys.exit(1)
+        s = mgr.get(args[1])
+        if not s:
+            print(f"Session not found: {args[1]}")
+            sys.exit(1)
+        print(f"Session:    {s.session_id}")
+        print(f"Provider:   {s.provider_name}")
+        print(f"Status:     {s.status}")
+        print(f"Created:    {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(s.created_at))}")
+        print(f"Updated:    {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(s.updated_at))}")
+        if s.context:
+            print(f"Context:")
+            for k, v in s.context.items():
+                print(f"  {k}: {v}")
+
+    elif sub == "checkpoint":
+        if len(args) < 2:
+            print("Usage: ai-hub session checkpoint <id>")
+            sys.exit(1)
+        try:
+            s = mgr.checkpoint(args[1])
+            print(f"Checkpointed: {s.session_id} ({s.status})")
+        except (KeyError, ValueError) as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    elif sub == "resume":
+        if len(args) < 2:
+            print("Usage: ai-hub session resume <id>")
+            sys.exit(1)
+        try:
+            s = mgr.resume(args[1])
+            print(f"Resumed: {s.session_id} ({s.status})")
+        except (KeyError, ValueError) as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    elif sub == "destroy":
+        if len(args) < 2:
+            print("Usage: ai-hub session destroy <id>")
+            sys.exit(1)
+        ok = mgr.destroy(args[1])
+        if ok:
+            print(f"Destroyed: {args[1]}")
+        else:
+            print(f"Session not found or already destroyed: {args[1]}")
+            sys.exit(1)
+
+    else:
+        print(f"Unknown subcommand: {sub}")
+        print("Available: list, create, show, checkpoint, resume, destroy")
+        sys.exit(1)
+
+    mgr.close()
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("AI Hub — One Task. Any AI. Any Runtime.\n")
@@ -196,6 +293,7 @@ def main() -> None:
         print("  ai-hub status           Show provider status")
         print("  ai-hub quota            Show quota status")
         print("  ai-hub caps             Show capability mapping")
+        print("  ai-hub session <cmd>    Manage sessions")
         sys.exit(0)
 
     command = sys.argv[1]
@@ -207,6 +305,7 @@ def main() -> None:
         "status": cmd_status,
         "quota": cmd_quota,
         "caps": cmd_caps,
+        "session": cmd_session,
     }
 
     if command not in commands:

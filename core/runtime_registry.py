@@ -1,162 +1,69 @@
 # AI Hub — RuntimeRegistry
-# Runtime 注册中心：管理 Runtime 类型 → Bridge 类的映射
+# V0.3: Session → Bridge 绑定管理
 #
-# 设计原则：
-#   - Runtime 可以动态注册
-#   - Provider 不知道 Runtime，Runtime 决定使用哪种 Bridge
-#   - Router 不修改
+# Session 创建时绑定一个 Bridge 会话（API/CLI/GUI 三类不同）。
+# RuntimeRegistry 维护 Session → Bridge 的映射。
+# Session.destroy() 时通知 Bridge 释放。
 #
-# 使用方式：
-#   reg = RuntimeRegistry.default()
-#   bridge = reg.create_bridge("browser", headless=False)
-#   # 或者注册自定义 Runtime
-#   reg.register("my_runtime", MyBridge, custom_param="default")
+# 不修改 Router，不修改 Provider。
 #
-# API Stability: Experimental
+# API Stability: Experimental（V0.3 新增，V0.4 稳定化）
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict
-
+from typing import Optional, Dict
 from core.bridge import Bridge
 
 
-@dataclass
-class Runtime:
-    """Runtime 描述符。
-
-    一个 Runtime 对应一种 Bridge 类型及其默认配置。
-    """
-
-    name: str                               # 唯一标识符，如 "browser"
-    bridge_cls: type[Bridge]                # 对应的 Bridge 类
-    description: str = ""                   # 一句话描述
-    default_config: dict[str, Any] = field(default_factory=dict)  # 默认配置
-
-
 class RuntimeRegistry:
-    """Runtime 注册中心。
+    """Session → Bridge 的绑定管理器。
 
-    管理 Runtime 类型 → Bridge 类的映射。
-    Provider 可以通过 RuntimeRegistry 动态获取 Bridge，
-    而不需要直接实例化具体的 Bridge 类。
-
-    不修改 Router。Provider 可选使用。
-
-    API Stability: Experimental
+    用法：
+        rr = RuntimeRegistry()
+        rr.bind(session_id, bridge)
+        bridge = rr.get_bridge(session_id)
+        rr.unbind(session_id)  # Session.destroy() 时调用
     """
-
-    _instance: RuntimeRegistry | None = None
 
     def __init__(self):
-        self._runtimes: Dict[str, Runtime] = {}
+        self._bindings: Dict[str, Bridge] = {}
 
-    @classmethod
-    def default(cls) -> RuntimeRegistry:
-        """获取默认单例，自动注册内置 Runtime 类型。"""
-        if cls._instance is None:
-            cls._instance = cls()
-            cls._instance._register_defaults()
-        return cls._instance
+    def bind(self, session_id: str, bridge: Bridge) -> None:
+        """绑定 Session 和 Bridge。
 
-    def _register_defaults(self):
-        """注册内置 Runtime 类型。"""
-        from core.bridge import (
-            FakeBridge,
-            CLIBridge,
-            APIBridge,
-            GUIBridge,
-            BrowserBridge,
-        )
-
-        self.register("fake", FakeBridge, description="Fake runtime for testing")
-        self.register("cli", CLIBridge, description="CLI subprocess runtime")
-        self.register("api", APIBridge, description="HTTP API runtime")
-        self.register("gui", GUIBridge, description="GUI automation runtime (pyautogui)")
-        self.register("browser", BrowserBridge, description="Browser automation runtime (Playwright)")
-
-    def register(
-        self,
-        name: str,
-        bridge_cls: type[Bridge],
-        description: str = "",
-        **default_config,
-    ) -> None:
-        """注册一个 Runtime 类型。
-
-        Args:
-            name: Runtime 名称
-            bridge_cls: 对应的 Bridge 类
-            description: 一句话描述
-            **default_config: Bridge 默认配置
+        如果 Session 已绑定其他 Bridge，覆盖旧绑定。
         """
-        if name in self._runtimes:
-            raise ValueError(f"Runtime '{name}' is already registered")
-        self._runtimes[name] = Runtime(
-            name=name,
-            bridge_cls=bridge_cls,
-            description=description,
-            default_config=default_config,
-        )
+        self._bindings[session_id] = bridge
 
-    def unregister(self, name: str) -> bool:
-        """注销一个 Runtime 类型。"""
-        if name in self._runtimes:
-            del self._runtimes[name]
+    def get_bridge(self, session_id: str) -> Optional[Bridge]:
+        """获取 Session 绑定的 Bridge。返回 None 如果未绑定。"""
+        return self._bindings.get(session_id)
+
+    def unbind(self, session_id: str) -> bool:
+        """解除绑定。
+
+        Returns:
+            True 如果成功解除，False 如果原本未绑定
+        """
+        if session_id in self._bindings:
+            del self._bindings[session_id]
             return True
         return False
 
-    def get(self, name: str) -> Runtime | None:
-        """获取 Runtime 描述符。"""
-        return self._runtimes.get(name)
+    def is_bound(self, session_id: str) -> bool:
+        """Session 是否已绑定 Bridge。"""
+        return session_id in self._bindings
 
-    def create_bridge(self, name: str, **config) -> Bridge:
-        """根据 Runtime 名称创建对应的 Bridge 实例。
+    def active_sessions(self) -> list[str]:
+        """返回所有已绑定 Bridge 的 Session ID 列表。"""
+        return list(self._bindings.keys())
 
-        合并默认配置和传入的配置（传入优先）。
+    def count(self) -> int:
+        """返回活跃绑定数。"""
+        return len(self._bindings)
 
-        Args:
-            name: Runtime 名称
-            **config: 覆盖默认配置的参数
-
-        Returns:
-            Bridge 实例
-
-        Raises:
-            ValueError: 如果 Runtime 未注册
-        """
-        runtime = self.get(name)
-        if runtime is None:
-            raise ValueError(
-                f"Runtime '{name}' not registered. "
-                f"Available: {self.available_types()}"
-            )
-        merged = {**runtime.default_config, **config}
-        return runtime.bridge_cls(**merged)
-
-    def available_types(self) -> list[str]:
-        """返回所有已注册的 Runtime 名称。"""
-        return list(self._runtimes.keys())
-
-    def all(self) -> list[Runtime]:
-        """返回所有已注册的 Runtime 描述符。"""
-        return list(self._runtimes.values())
-
-    def check_available(self, name: str) -> bool:
-        """检查某个 Runtime 是否可用（创建 Bridge 并检查 check_available）。"""
-        runtime = self.get(name)
-        if runtime is None:
-            return False
-        try:
-            bridge = self.create_bridge(name)
-            return bridge.check_available()
-        except Exception:
-            return False
-
-    def available_runtimes(self) -> list[str]:
-        """返回所有当前可用的 Runtime 名称。"""
-        return [name for name in self._runtimes if self.check_available(name)]
-
-    def __repr__(self) -> str:
-        return f"<RuntimeRegistry runtimes={self.available_types()}>"
+    def clear(self) -> int:
+        """解除所有绑定。返回解除的数量。"""
+        n = len(self._bindings)
+        self._bindings.clear()
+        return n
