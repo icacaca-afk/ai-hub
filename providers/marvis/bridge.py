@@ -98,44 +98,28 @@ def _ctrl_key(vk_char: int):
 
 
 def _clipboard_get() -> str:
-    """Read text from clipboard. Returns '' on failure."""
-    CF_UNICODETEXT = 13
-    if not ctypes.windll.user32.OpenClipboard(0):
-        return ""
+    """Read text from clipboard via PowerShell."""
+    import subprocess
     try:
-        h = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
-        if not h:
-            return ""
-        p = ctypes.windll.kernel32.GlobalLock(h)
-        if not p:
-            return ""
-        try:
-            return ctypes.wstring_at(p)  # type: ignore[attr-defined]
-        finally:
-            ctypes.windll.kernel32.GlobalUnlock(p)
-    finally:
-        ctypes.windll.user32.CloseClipboard()
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard | Out-String -NoNewline"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.stdout.rstrip('\n').rstrip('\r')
+    except Exception:
+        return ""
 
 
 def _clipboard_set(text: str):
-    """Write text to clipboard via WM_COPYDATA / standard Windows API."""
-    CF_UNICODETEXT = 13
-    if not text:
-        return
-    encoded = (text + '\x00').encode('utf-16-le')
-    if not ctypes.windll.user32.OpenClipboard(0):
-        return
+    """Write text to clipboard via clip.exe."""
+    import subprocess
     try:
-        ctypes.windll.user32.EmptyClipboard()
-        hmem = ctypes.windll.kernel32.GlobalAlloc(0x0002, len(encoded))  # GMEM_MOVEABLE
-        if hmem:
-            p = ctypes.windll.kernel32.GlobalLock(hmem)
-            if p:
-                ctypes.memmove(p, encoded, len(encoded))
-                ctypes.windll.kernel32.GlobalUnlock(hmem)
-            ctypes.windll.user32.SetClipboardData(CF_UNICODETEXT, hmem)
-    finally:
-        ctypes.windll.user32.CloseClipboard()
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $input"],
+            input=text, text=True, timeout=5,
+        )
+    except Exception:
+        pass
 
 
 # ── MarvisBridge ──────────────────────────────────────────────────
