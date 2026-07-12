@@ -128,8 +128,8 @@ class MarvisBridge(Bridge):
         self,
         app_name: str = "Marvis",
         timeout: int = 300,
-        poll_interval: float = 2.0,
-        max_idle_polls: int = 8,
+        poll_interval: float = 1.0,
+        max_idle_polls: int = 3,
     ):
         self.app_name = app_name
         self.timeout = timeout
@@ -167,11 +167,24 @@ class MarvisBridge(Bridge):
         time.sleep(0.3)
 
         # ── 5. Wait for response via clipboard polling ─────────
-        #     Periodically select-all + copy to capture response
+        #     Click conversation area → select-all → copy
+        #     After Enter, focus stays in input box; click upper half first.
+        import ctypes.windll
         prev = ""
         idle_count = 0
         deadline = start + timeout
         output = ""
+
+        # Get window rect for clicking conversation area
+        rect = ctypes.create_string_buffer(16)
+        ctypes.windll.user32.GetWindowRect(hwnd, rect)
+        w_left = int.from_bytes(rect[0:4], 'little')
+        w_top = int.from_bytes(rect[4:8], 'little')
+        w_right = int.from_bytes(rect[8:12], 'little')
+        w_bottom = int.from_bytes(rect[12:16], 'little')
+        # Click upper 1/3 for conversation area, horizontal center
+        conv_x = (w_left + w_right) // 2
+        conv_y = w_top + (w_bottom - w_top) // 3
 
         while time.time() < deadline:
             time.sleep(self.poll_interval)
@@ -182,10 +195,16 @@ class MarvisBridge(Bridge):
                     error="Marvis window closed during wait",
                 )
 
-            # activate, select-all, copy
+            # activate, click conversation area, select-all, copy
             _activate_window(hwnd)
             time.sleep(0.05)
-            _ctrl_key(VK_A)     # Ctrl+A : select all
+            # Click conversation area (upper portion) to move focus away from input
+            ctypes.windll.user32.SetCursorPos(conv_x, conv_y)
+            time.sleep(0.05)
+            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+            time.sleep(0.1)
+            _ctrl_key(VK_A)     # Ctrl+A : select all conversation
             time.sleep(0.1)
             _ctrl_key(VK_C)     # Ctrl+C : copy
             time.sleep(0.2)
