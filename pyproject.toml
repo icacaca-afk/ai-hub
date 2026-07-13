@@ -30,6 +30,7 @@ packages = [
     "providers.openai_api",
     "providers.openai_compatible",
     "providers.fake_browser",
+    "providers.web_ai",
     "adapters",
     "scripts",
 ]

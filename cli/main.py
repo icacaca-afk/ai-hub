@@ -52,6 +52,9 @@ def _build_registry() -> CapabilityRegistry:
     from providers.fake_browser.provider import FakeBrowserProvider
     registry.register(FakeBrowserProvider())
 
+    from providers.web_ai.provider import WebAIProvider
+    registry.register(WebAIProvider())
+
     return registry
 
 

@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+
 from core.provider import Provider, ProviderMetadata
 from core.bridge import BrowserBridge
 
@@ -17,14 +20,14 @@ class FakeBrowserProvider(Provider):
     当 Playwright 未安装时不可用，安装后自动可用。
 
     环境变量：
-        无（Playwright 需独立安装）
+        AI_HUB_SCREENSHOT_DIR — 自定义截图目录（默认系统临时目录）
     """
 
     metadata = ProviderMetadata(
         name="fake_browser",
-        display_name="Fake Browser",
+        display_name="Browser (Playwright)",
         description="Browser automation via Playwright (requires playwright install)",
-        version="0.1.0",
+        version="0.2.0",
         capabilities=[
             "browser.navigate",
             "browser.scrape",
@@ -39,10 +42,17 @@ class FakeBrowserProvider(Provider):
         timeout=120,
     )
 
+    # 截图目录：优先环境变量，其次系统临时目录
+    _screenshot_dir = os.environ.get(
+        "AI_HUB_SCREENSHOT_DIR",
+        os.path.join(tempfile.gettempdir(), "ai_hub_browser"),
+    )
+
     bridge = BrowserBridge(
         headless=True,
         browser_type="chromium",
         timeout=120,
+        screenshot_dir=_screenshot_dir,
     )
 
     def health(self) -> bool:

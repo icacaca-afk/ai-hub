@@ -131,6 +131,14 @@ def test_openai_provider_contract():
     print("✅ test_openai_provider_contract passed")
 
 
+def test_web_ai_provider_contract():
+    """Web AI Provider (BrowserBridge) 必须通过 Contract。"""
+    from providers.web_ai.provider import WebAIProvider
+    errors = check_contract(WebAIProvider)
+    assert not errors, f"WebAIProvider contract violations: {errors}"
+    print("✅ test_web_ai_provider_contract passed")
+
+
 def test_zero_modification_kpi():
     """KPI: 新增 Provider 不应修改 core/ 和 bridge.py。
 
@@ -177,8 +185,9 @@ def test_capability_metadata_consistency():
     from providers.qoder.provider import QoderProvider
     from providers.gemini.provider import GeminiCLIProvider
     from providers.openai_api.provider import OpenAIAPIProvider
+    from providers.web_ai.provider import WebAIProvider
 
-    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider]
+    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider, WebAIProvider]
     for p_class in providers:
         for cap in p_class.metadata.capabilities:
             assert cap in CAPABILITIES, (
@@ -195,6 +204,7 @@ def run_all():
         test_qoder_provider_contract,
         test_gemini_provider_contract,
         test_openai_provider_contract,
+        test_web_ai_provider_contract,
         test_marvis_provider_contract,
         test_zero_modification_kpi,
         test_capability_metadata_consistency,

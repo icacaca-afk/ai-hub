@@ -29,3 +29,6 @@ quota/quota_state.json
 # Test
 .pytest_cache/
 .coverage
+
+# Browser screenshots (temp)
+tmp_screenshots/
