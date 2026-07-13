@@ -22,7 +22,7 @@ from pathlib import Path
 # ─── 配置常量 ───
 AI_HUB_MCP_CONFIG = {
     "ai-hub": {
-        "command": "python",
+        "command": sys.executable,
         "args": ["-m", "ai_hub.adapters.marvis_mcp_server"],
     }
 }
@@ -36,12 +36,16 @@ MARVIS_CONFIG_CANDIDATES = [
 ]
 
 
-def find_marvis_config() -> Path | None:
-    """查找 Marvis 配置文件。返回找到的第一个路径，或 None。"""
+def find_marvis_config() -> list[Path]:
+    """查找 Marvis 配置文件。返回找到的所有路径列表，或空列表。"""
+    found = []
     for candidate in MARVIS_CONFIG_CANDIDATES:
         if candidate.exists():
-            print(f"[OK] Found existing config: {candidate}")
-            return candidate
+            print(f"[OK] Found config: {candidate}")
+            found.append(candidate)
+
+    if found:
+        return found
 
     # 广搜 AppData 下的 Marvis 相关文件
     for root_str in [os.environ.get("APPDATA", ""), os.environ.get("LOCALAPPDATA", "")]:
@@ -54,15 +58,18 @@ def find_marvis_config() -> Path | None:
                 if "mcp" in name_lower and path.suffix in (".json",):
                     print(f"[INFO] Found MCP-related file: {path}")
                     if "marvis" in name_lower or "client" in name_lower:
-                        return path
+                        found.append(path)
         except PermissionError:
             continue
 
-    return None
+    return found
 
 
 def configure_mcp(config_path: Path) -> bool:
-    """在 Marvis 配置文件中追加 ai-hub MCP server 配置。"""
+    """在 Marvis 配置文件中追加 ai-hub MCP server 配置。
+
+    安全写入：先写 tmp 文件，验证 JSON 后 rename 覆盖原文件。
+    """
     existing_config = {}
     if config_path.exists():
         try:
@@ -70,6 +77,7 @@ def configure_mcp(config_path: Path) -> bool:
                 existing_config = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             print(f"[WARN] Failed to read existing config: {e}")
+            # 即使读取失败也继续，因为可能是损坏的 JSON，我们会写入新的
 
     # 备份
     if existing_config and config_path.exists():
@@ -97,16 +105,28 @@ def configure_mcp(config_path: Path) -> bool:
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # 安全写入：先写 .tmp，成功后 rename
+    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
     try:
-        with open(config_path, "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(existing_config, f, indent=2, ensure_ascii=False)
             f.write("\n")
+
+        # 验证 tmp 文件是合法 JSON
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            json.load(f)  # 如果 JSON 不合法会抛异常
+
+        # rename 覆盖原文件（原子操作）
+        tmp_path.replace(config_path)
         print(f"[OK] Config written to: {config_path}")
         print(f"\nConfig content (mcpServers section):")
         print(json.dumps(existing_config["mcpServers"], indent=2))
         return True
-    except OSError as e:
+    except (OSError, json.JSONDecodeError) as e:
         print(f"[ERROR] Failed to write config: {e}")
+        # 清理 tmp 文件
+        if tmp_path.exists():
+            tmp_path.unlink()
         return False
 
 
@@ -173,8 +193,10 @@ def main() -> int:
 
     # Step 2: 查找配置文件
     print("[Step 2] Finding Marvis config file...")
-    config_path = find_marvis_config()
-    if config_path is None:
+    config_paths = find_marvis_config()
+
+    config_path = None
+    if len(config_paths) == 0:
         print("\n[WARN] Could not find Marvis config file automatically.")
         env_path = os.environ.get("MARVIS_CONFIG_PATH")
         if env_path:
@@ -184,6 +206,26 @@ def main() -> int:
             default_path = Path(os.environ.get("APPDATA", ""), "Marvis", "marvis-client.config.json")
             print(f"\n[INFO] Will create new config at: {default_path}")
             config_path = default_path
+    elif len(config_paths) == 1:
+        config_path = config_paths[0]
+    else:
+        print(f"\n[WARN] Found {len(config_paths)} Marvis config files:")
+        for i, p in enumerate(config_paths):
+            print(f"  [{i + 1}] {p}")
+        print(f"  [0] Create new at default location")
+        choice = input("Select config to configure (number): ").strip()
+        try:
+            idx = int(choice)
+            if idx == 0:
+                config_path = Path(os.environ.get("APPDATA", ""), "Marvis", "marvis-client.config.json")
+            elif 1 <= idx <= len(config_paths):
+                config_path = config_paths[idx - 1]
+            else:
+                print("[FAIL] Invalid choice.")
+                return 1
+        except ValueError:
+            print("[FAIL] Invalid input.")
+            return 1
     print()
 
     # Step 3: 写入配置

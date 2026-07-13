@@ -25,6 +25,8 @@ class Result:
     error: str | None = None                # 错误详情；成功时为 None
     artifacts: list[str] = field(default_factory=list)  # 产物文件路径列表（截图/PDF/代码文件等）
     metadata: dict[str, Any] = field(default_factory=dict)  # 执行元数据
+    code: str | None = None                 # 错误码（机器可读），如 NO_PROVIDER / PROVIDER_TIMEOUT / PROVIDER_FAILED
+    retryable: bool = False                 # 是否值得重试（timeout/unavailable 为 True，参数错误为 False）
 
     def __post_init__(self):
         valid = {"success", "failed", "timeout", "partial"}
@@ -45,6 +47,8 @@ class Result:
             "error": self.error,
             "artifacts": self.artifacts,
             "metadata": self.metadata,
+            "code": self.code,
+            "retryable": self.retryable,
         }
 
     @classmethod
@@ -56,6 +60,8 @@ class Result:
             error=data.get("error"),
             artifacts=data.get("artifacts", []),
             metadata=data.get("metadata", {}),
+            code=data.get("code"),
+            retryable=data.get("retryable", False),
         )
 
     def __str__(self) -> str:

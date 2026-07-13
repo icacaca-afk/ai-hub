@@ -52,9 +52,6 @@ def _build_registry() -> CapabilityRegistry:
     from providers.fake_browser.provider import FakeBrowserProvider
     registry.register(FakeBrowserProvider())
 
-    from providers.marvis.provider import MarvisProvider
-    registry.register(MarvisProvider())
-
     return registry
 
 

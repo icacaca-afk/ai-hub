@@ -83,7 +83,6 @@ def _get_registry() -> CapabilityRegistry:
         ("providers.openai_api.provider", "OpenAIAPIProvider"),
         ("providers.qoder.provider", "QoderProvider"),
         ("providers.fake_browser.provider", "FakeBrowserProvider"),
-        ("providers.marvis.provider", "MarvisProvider"),
     ]
 
     registered_count = 0
@@ -127,51 +126,93 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def run_provider(
-    capability: str,
-    content: str,
-    context: dict | None = None,
-) -> dict:
+def run_provider(task: dict) -> dict:
     """通过 ai-hub 执行任务。
 
     Args:
-        capability: 能力标签，如：
-            - text.generate — 生成文本
-            - code.generate — 生成代码
-            - general.chat — 通用对话
-            - search.web — 网络搜索
-            - text.analyze — 分析文本
-            - text.summarize — 总结文本
-            - code.debug — 调试代码
-            - browser.navigate — 浏览器导航
-            （完整列表见 ai_hub.core.capabilities.CAPABILITIES）
-        content: 任务内容（自然语言描述）
-        context: 附加上下文（可选），如 {"language": "python"}
+        task: 任务描述，JSON 对象，字段如下：
+            - capability (str, 必填): 能力标签，如 "code.generate"、"general.chat"、
+              "search.web"、"text.summarize" 等（完整列表见 list_capabilities）
+            - content (str, 必填): 任务内容（自然语言描述）
+            - context (dict, 可选): 附加上下文，如 {"language": "python"}
+            - session (str, 可选): 会话 ID，用于多轮对话
+            - timeout (int, 可选): 超时秒数，默认 300
 
     Returns:
+        成功时：
         {
-            "success": bool,       // 是否成功
-            "output": str,         // 执行结果文本
-            "error": str | null,   // 错误信息（成功时为 null）
-            "provider": str,       // 执行的 Provider 名称
-            "capability": str,     // 实际使用的能力标签
-            "duration_ms": int,    // 执行耗时（毫秒）
-            "artifacts": list,     // 产物文件路径列表
+            "success": true,
+            "output": str,          // 执行结果文本
+            "error": null,
+            "code": null,
+            "retryable": false,
+            "provider": str,        // 执行的 Provider 名称
+            "capability": str,      // 实际使用的能力标签
+            "duration_ms": int,     // 执行耗时（毫秒）
+            "artifacts": list,      // 产物文件路径列表
+        }
+        失败时：
+        {
+            "success": false,
+            "output": "",
+            "error": str,           // 人类可读错误描述
+            "code": str,            // 错误码，如 "NO_PROVIDER"、"PROVIDER_TIMEOUT"、"INTERNAL"
+            "retryable": bool,      // 是否值得重试
+            "provider": str | null,
+            "capability": str,
+            "duration_ms": int,
+            "artifacts": [],
         }
     """
     start = time.time()
 
+    # 错误码常量
+    _ERROR_CODES = {
+        "NO_PROVIDER": (False, "No available provider"),
+        "PROVIDER_FAILED": (True, "Provider execution failed"),
+        "BAD_REQUEST": (False, "Invalid task"),
+        "INTERNAL": (False, "Internal error"),
+    }
+
+    def _fail(code: str, message: str, provider: str | None = None) -> dict:
+        retryable = _ERROR_CODES.get(code, (False, ""))[0]
+        return {
+            "success": False,
+            "output": "",
+            "error": message,
+            "code": code,
+            "retryable": retryable,
+            "provider": provider,
+            "capability": task.get("capability", ""),
+            "duration_ms": int((time.time() - start) * 1000),
+            "artifacts": [],
+        }
+
     try:
-        # 1. 创建 Task
-        task = Task(
+        # 1. 参数校验
+        if not isinstance(task, dict):
+            return _fail("BAD_REQUEST", f"task must be a dict, got {type(task).__name__}")
+
+        capability = task.get("capability")
+        content = task.get("content")
+
+        if not capability or not isinstance(capability, str):
+            return _fail("BAD_REQUEST", "task.capability is required and must be a string")
+        if not content or not isinstance(content, str):
+            return _fail("BAD_REQUEST", "task.content is required and must be a string")
+
+        context = task.get("context") or {}
+
+        # 2. 创建 Task
+        task_obj = Task(
             content=content,
             capabilities=[capability],
-            context=context or {},
+            context=context,
         )
 
-        # 2. 路由 + 执行
+        # 3. 路由 + 执行
         router = _get_router()
-        provider = router.route(task)
+        provider = router.route(task_obj)
 
         if provider is None:
             available_caps = []
@@ -181,53 +222,66 @@ def run_provider(
                     available_caps.extend(p.capabilities)
             except Exception:
                 pass
-            return {
-                "success": False,
-                "output": "",
-                "error": (
-                    f"No available provider for capability '{capability}'. "
-                    f"Available capabilities from registered providers: "
-                    f"{sorted(set(available_caps)) or '(none)'}"
-                ),
-                "provider": None,
-                "capability": capability,
-                "duration_ms": int((time.time() - start) * 1000),
-                "artifacts": [],
-            }
+            return _fail(
+                "NO_PROVIDER",
+                f"No available provider for capability '{capability}'. "
+                f"Available: {sorted(set(available_caps)) or '(none)'}",
+            )
 
-        # 3. 执行（Router.execute 内部做 select_bridge + bridge.run + 转换 Result）
-        result: Result = router.execute(task)
+        # 4. 执行
+        result: Result = router.execute(task_obj)
         duration_ms = int((time.time() - start) * 1000)
 
-        # 4. 记录历史
+        # 5. 记录历史
         try:
             history = HistoryStore()
-            history.add(task.content, capability, provider.name, result)
+            history.add(task_obj.content, capability, provider.name, result)
         except Exception as e:
             logger.warning(f"Failed to record history: {e}")
 
-        # 5. 返回结构化结果
-        return {
-            "success": result.is_success,
-            "output": result.output,
-            "error": result.error,
-            "provider": result.provider,
-            "capability": capability,
-            "duration_ms": duration_ms,
-            "artifacts": result.artifacts,
-        }
+        # 6. 返回结构化结果
+        if result.is_success:
+            return {
+                "success": True,
+                "output": result.output,
+                "error": None,
+                "code": None,
+                "retryable": False,
+                "provider": result.provider,
+                "capability": capability,
+                "duration_ms": duration_ms,
+                "artifacts": result.artifacts,
+            }
+        else:
+            # 优先使用 Result 自身的 code/retryable；如果未设置则从 error 推断
+            if result.code:
+                code = result.code
+            else:
+                err_str = result.error or ""
+                if "timeout" in err_str.lower() or "timed out" in err_str.lower():
+                    code = "PROVIDER_TIMEOUT"
+                elif "quota" in err_str.lower():
+                    code = "QUOTA_EXHAUSTED"
+                elif "not found" in err_str.lower() or "window" in err_str.lower():
+                    code = "PROVIDER_UNAVAILABLE"
+                else:
+                    code = "PROVIDER_FAILED"
+            retryable = result.retryable if result.code else code in ("PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE")
+            return {
+                "success": False,
+                "output": result.output,
+                "error": result.error,
+                "code": code,
+                "retryable": retryable,
+                "provider": result.provider,
+                "capability": capability,
+                "duration_ms": duration_ms,
+                "artifacts": result.artifacts,
+            }
 
     except Exception as e:
         logger.exception(f"run_provider failed: {e}")
-        return {
-            "success": False,
-            "output": "",
-            "error": f"Internal error: {type(e).__name__}: {e}",
-            "provider": None,
-            "capability": capability,
-            "duration_ms": int((time.time() - start) * 1000),
-            "artifacts": [],
-        }
+        return _fail("INTERNAL", f"{type(e).__name__}: {e}")
 
 
 @mcp.tool()

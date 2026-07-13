@@ -159,11 +159,15 @@ def test_zero_modification_kpi():
 
 
 def test_marvis_provider_contract():
-    """Marvis Provider (MarvisBridge) 必须通过 Contract。"""
-    from providers.marvis.provider import MarvisProvider
-    errors = check_contract(MarvisProvider)
-    assert not errors, f"MarvisProvider contract violations: {errors}"
-    print("✅ test_marvis_provider_contract passed")
+    """Marvis Provider 已在 V0.4.2 中移除（GUI 路线废弃，ADR-0007 改为 MCP 反向集成）。
+    保留此测试作为占位，确保不再有人重新引入 MarvisProvider。
+    """
+    try:
+        from providers.marvis.provider import MarvisProvider  # noqa: F401
+        pytest.fail("MarvisProvider should not exist (removed in V0.4.2, ADR-0007)")
+    except ModuleNotFoundError:
+        pass  # Expected: providers.marvis module should not exist
+    print("✅ test_marvis_provider_contract passed (Marvis correctly removed)")
 
 
 def test_capability_metadata_consistency():
@@ -174,9 +178,7 @@ def test_capability_metadata_consistency():
     from providers.gemini.provider import GeminiCLIProvider
     from providers.openai_api.provider import OpenAIAPIProvider
 
-    from providers.marvis.provider import MarvisProvider
-
-    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider, MarvisProvider]
+    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider]
     for p_class in providers:
         for cap in p_class.metadata.capabilities:
             assert cap in CAPABILITIES, (
