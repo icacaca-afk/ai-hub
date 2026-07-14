@@ -36,6 +36,7 @@ V0.7 需要让 Router 在选 Provider 时跳过 unavailable 的 Provider，degra
 - `route()` 逻辑与父类有重复（capability match + fallback 链），这是 Core Freeze 的必要代价
 - 未来如果引入 RouterPolicy pipeline，可以消除重复
 - `last_route_reason` 属性记录路由决策原因，方便调试
+- Fallback providers are intentionally not health-filtered in V0.7.0 because fallback represents the final recovery path. Recursive health-aware fallback is deferred.
 
 ## Future
 
