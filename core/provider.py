@@ -50,6 +50,9 @@ class ProviderMetadata:
     quota_total: int = -1               # 总额度，-1 表示无限制
     quota_auto_detect: bool = False     # 是否自动检测额度
 
+    # Health 框架（V0.6 新增）
+    health_type: str = ""               # cli / api / browser / mcp，空=fallback 到智能推断
+
     # 成本（预留）
     cost_currency: str | None = None
     cost_amount: float = 0.0

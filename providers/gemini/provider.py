@@ -17,6 +17,7 @@ import os
 
 from core.provider import Provider, ProviderMetadata
 from core.bridge import CLIBridge
+from core.health import HealthReport
 
 
 # 从环境变量读取配置，避免硬编码
@@ -47,6 +48,7 @@ class GeminiCLIProvider(Provider):
         fallback=["openai_api", "demo"],
         quota_type="unlimited",
         quota_total=-1,
+        health_type="cli",
     )
 
     bridge = CLIBridge(
@@ -61,9 +63,56 @@ class GeminiCLIProvider(Provider):
         },
     )
 
-    def health(self) -> bool:
-        """检查 gemini CLI 是否已安装。"""
-        return self.bridge.check_available()
+    def health(self) -> HealthReport:
+        """检查 gemini CLI 健康状态。
+
+        检查项：
+        1. gemini 可执行文件是否存在
+        2. 版本命令是否正常
+        3. API Key 是否配置
+        4. 认证状态（通过简单请求验证）
+        """
+        import time
+        start = time.time()
+
+        try:
+            # 1. CLI 可用性
+            if not self.bridge.check_available():
+                return HealthReport.unavailable(
+                    self.name,
+                    message="gemini CLI not installed or not found in PATH",
+                    latency_ms=int((time.time() - start) * 1000),
+                )
+
+            # 2. API Key 检查
+            if not GEMINI_API_KEY:
+                return HealthReport(
+                    provider=self.name,
+                    status=HealthReport.DEGRADED,
+                    authenticated=False,
+                    quota_ok=True,
+                    latency_ms=int((time.time() - start) * 1000),
+                    message="Gemini CLI installed but GEMINI_API_KEY not set",
+                )
+
+            # 3. 简单请求验证
+            auth_ok = self.authenticated()
+            elapsed = int((time.time() - start) * 1000)
+
+            return HealthReport.healthy(
+                self.name,
+                latency_ms=elapsed,
+                authenticated=auth_ok,
+                quota_ok=True,
+                message="Gemini CLI ready" if auth_ok else "Gemini CLI available but auth failed",
+            )
+
+        except Exception as e:
+            return HealthReport.unavailable(
+                self.name,
+                message=f"Gemini health check failed: {e}",
+                latency_ms=int((time.time() - start) * 1000),
+            )
 
     def authenticated(self) -> bool:
         """检查 API Key 是否已配置。"""

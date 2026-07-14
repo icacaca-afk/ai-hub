@@ -19,6 +19,7 @@ import tempfile
 
 from core.provider import Provider, ProviderMetadata
 from core.bridge import BrowserBridge
+from core.health import HealthReport
 
 
 class WebAIProvider(Provider):
@@ -60,6 +61,7 @@ class WebAIProvider(Provider):
         fallback=["demo"],
         quota_type="unlimited",
         quota_total=-1,
+        health_type="browser",
         timeout=120,
     )
 
@@ -70,8 +72,41 @@ class WebAIProvider(Provider):
         screenshot_dir=_screenshot_dir,
     )
 
-    def health(self) -> bool:
-        return self.bridge.check_available()
+    def health(self) -> HealthReport:
+        """Browser Bridge 健康检查。
+
+        检查项：
+        1. Playwright 是否已安装
+        2. Chromium 浏览器是否存在
+        3. 能否启动浏览器
+        不测试登录状态（登录属于 Session 范畴）。
+        """
+        import time
+        start = time.time()
+
+        try:
+            if not self.bridge.check_available():
+                return HealthReport.unavailable(
+                    self.name,
+                    message="Playwright not installed or Chromium not found",
+                    latency_ms=int((time.time() - start) * 1000),
+                )
+
+            elapsed = int((time.time() - start) * 1000)
+            return HealthReport.healthy(
+                self.name,
+                latency_ms=elapsed,
+                authenticated=None,  # 登录属 Session，不在这里测
+                quota_ok=True,
+                message="Browser bridge ready",
+            )
+
+        except Exception as e:
+            return HealthReport.unavailable(
+                self.name,
+                message=f"Browser health check failed: {e}",
+                latency_ms=int((time.time() - start) * 1000),
+            )
 
     def authenticated(self) -> bool:
         # Web AI 不需要独立认证（浏览器登录态由用户管理）

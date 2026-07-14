@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from core.provider import Provider, ProviderMetadata
 from core.bridge import CLIBridge
+from core.health import HealthReport
 
 
 class QoderProvider(Provider):
@@ -40,6 +41,7 @@ class QoderProvider(Provider):
         quota_type="daily",
         quota_total=80,
         quota_auto_detect=False,
+        health_type="cli",
     )
 
     # 关键：复用 CLIBridge 已有的 command_template + env 参数，零修改 core/bridge.py
@@ -53,9 +55,42 @@ class QoderProvider(Provider):
 
     _quota_remaining: int = 80
 
-    def health(self) -> bool:
-        """CLI 是否安装。"""
-        return self.bridge.check_available()
+    def health(self) -> HealthReport:
+        """CLI 是否安装。
+
+        检查项：qoderclicn 命令是否存在、版本号是否可获取。
+        """
+        import time
+        start = time.time()
+
+        try:
+            available = self.bridge.check_available()
+            elapsed = int((time.time() - start) * 1000)
+
+            if available:
+                return HealthReport.healthy(
+                    self.name,
+                    latency_ms=elapsed,
+                    authenticated=None,  # QODER 认证需额外检查
+                    quota_ok=True,
+                    message="QODER CLI ready",
+                )
+            else:
+                return HealthReport(
+                    provider=self.name,
+                    status=HealthReport.DEGRADED,
+                    authenticated=False,
+                    quota_ok=True,
+                    latency_ms=elapsed,
+                    message="QODER CLI not installed or not found in PATH",
+                )
+
+        except Exception as e:
+            return HealthReport.unavailable(
+                self.name,
+                message=f"QODER health check failed: {e}",
+                latency_ms=int((time.time() - start) * 1000),
+            )
 
     def authenticated(self) -> bool:
         """是否已登录。
