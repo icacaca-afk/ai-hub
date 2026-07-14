@@ -21,6 +21,7 @@ from core.registry import CapabilityRegistry
 from core.task import Task
 from core.history import HistoryStore
 from router.router import Router
+from cli.explain_route import cmd_explain_route
 
 
 def _build_registry() -> CapabilityRegistry:
@@ -680,6 +681,7 @@ def main() -> None:
         print("  ai-hub benchmark         Benchmark provider latency & success")
         print("  ai-hub quota            Show quota status")
         print("  ai-hub caps             Show capability mapping")
+        print('  ai-hub explain-route "<task>"  Explain routing decision')
         print("  ai-hub session <cmd>    Manage sessions")
         sys.exit(0)
 
@@ -695,6 +697,7 @@ def main() -> None:
         "session": cmd_session,
         "doctor": cmd_doctor,
         "benchmark": cmd_benchmark,
+        "explain-route": cmd_explain_route,
     }
 
     if command not in commands:
