@@ -16,10 +16,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
-def _run_explain_route(task_text: str) -> tuple[int, str, str]:
+def _run_explain_route(task_text: str, extra_args: list[str] = None) -> tuple[int, str, str]:
     """运行 explain-route 命令，返回 (exit_code, stdout, stderr)。"""
+    cmd = [sys.executable, "-m", "cli.main", "explain-route"] + task_text.split() + (extra_args or [])
     result = subprocess.run(
-        [sys.executable, "-m", "cli.main", "explain-route", task_text],
+        cmd,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -141,3 +142,70 @@ class TestExplainRouteRegistered:
             timeout=10,
         )
         assert "explain-route" in (result.stdout or "")
+
+
+class TestExplainRouteJSON:
+    """--json 模式测试。"""
+
+    def test_json_output_valid_json(self):
+        """--json 输出是合法 JSON。"""
+        import json
+        code, out, err = _run_explain_route("write code", ["--json"])
+        # 去掉可能的 stderr 干扰
+        assert code == 0, f"exit={code}, stderr={err}"
+        # 尝试解析 JSON
+        data = json.loads(out)
+        assert isinstance(data, dict)
+
+    def test_json_has_required_fields(self):
+        """JSON 输出包含必要字段。"""
+        import json
+        code, out, _ = _run_explain_route("write code", ["--json"])
+        assert code == 0
+        data = json.loads(out)
+        assert "version" in data
+        assert "task" in data
+        assert "capabilities" in data
+        assert "candidates" in data
+        assert "decision" in data
+
+    def test_json_task_text(self):
+        """JSON 中 task 字段正确。"""
+        import json
+        code, out, _ = _run_explain_route("sort numbers", ["--json"])
+        assert code == 0
+        data = json.loads(out)
+        assert "sort numbers" in data["task"]
+
+    def test_json_candidates_have_fields(self):
+        """每个 candidate 包含 name/health/priority/bridge/selected。"""
+        import json
+        code, out, _ = _run_explain_route("write code", ["--json"])
+        assert code == 0
+        data = json.loads(out)
+        assert len(data["candidates"]) > 0
+        for c in data["candidates"]:
+            assert "name" in c
+            assert "health" in c
+            assert "priority" in c
+            assert "bridge" in c
+            assert "selected" in c
+
+    def test_json_exactly_one_selected(self):
+        """有候选时恰好一个 selected=True。"""
+        import json
+        code, out, _ = _run_explain_route("write code", ["--json"])
+        assert code == 0
+        data = json.loads(out)
+        selected = [c for c in data["candidates"] if c["selected"]]
+        if data["decision"].get("selected"):
+            assert len(selected) == 1
+
+    def test_json_decision_has_selected_or_reason(self):
+        """decision 包含 selected 或 reason。"""
+        import json
+        code, out, _ = _run_explain_route("write code", ["--json"])
+        assert code == 0
+        data = json.loads(out)
+        dec = data["decision"]
+        assert "selected" in dec
