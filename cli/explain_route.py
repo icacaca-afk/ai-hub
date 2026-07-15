@@ -68,7 +68,7 @@ def cmd_explain_route(args: list[str]) -> None:
 def _output_human(text, caps, candidates, reports, selected, reason, quota, router):
     """人类可读格式输出。"""
     # ── 输出 ──
-    print("AI Hub Route Explanation v0.8")
+    print("AI Hub Route Explanation v0.8.2")
     print()
     print(f"Task:")
     print(f"  {text}")
@@ -119,10 +119,13 @@ def _output_human(text, caps, candidates, reports, selected, reason, quota, rout
     # ── Decision ──
     print("Decision:")
     if selected:
-        group = reason.get("group", "?")
+        strategy = reason.get("strategy", "?")
+        reason_str = reason.get("reason", "")
         score_val = reason.get("score", "?")
         print(f"  Selected:  {selected.name}")
-        print(f"  Group:     {group}")
+        print(f"  Strategy:  {strategy}")
+        if reason_str:
+            print(f"  Reason:    {reason_str}")
         if score_val != "?":
             print(f"  Score:     {score_val}")
     else:
@@ -142,7 +145,8 @@ def _output_human(text, caps, candidates, reports, selected, reason, quota, rout
 def _output_json(text, caps, candidates, reports, selected, reason, quota, router):
     """机器可读 JSON 格式输出。"""
     output = {
-        "version": "v0.8",
+        "schema_version": "2",
+        "runtime_version": "0.8.2",
         "task": text,
         "capabilities": list(caps),
         "candidates": [],
@@ -176,12 +180,15 @@ def _output_json(text, caps, candidates, reports, selected, reason, quota, route
     if selected:
         output["decision"] = {
             "selected": selected.name,
-            "group": reason.get("group", "?"),
+            "strategy": reason.get("strategy", "?"),
+            "reason": reason.get("reason", ""),
+            "score": reason.get("score"),
             "skipped": reason.get("skipped", []),
         }
     else:
         output["decision"] = {
             "selected": None,
+            "strategy": reason.get("strategy", "none"),
             "reason": reason.get("reason", "unknown"),
             "skipped": reason.get("skipped", []),
         }

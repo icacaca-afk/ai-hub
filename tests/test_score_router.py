@@ -290,7 +290,7 @@ class TestScoreRouterRouting:
         router.route(task)
 
         assert "score" in router.last_route_reason
-        assert router.last_route_reason["group"] == "score"
+        assert router.last_route_reason["strategy"] == "score"
 
     def test_fallback_chain_works(self):
         """所有候选不可用时走 fallback 链。"""
@@ -309,7 +309,7 @@ class TestScoreRouterRouting:
         # p1 unavailable → fallback to p2
         assert selected is not None
         assert selected.name == "p2"
-        assert router.last_route_reason["group"] == "fallback"
+        assert router.last_route_reason["strategy"] == "fallback"
 
     def test_execute_inherited(self):
         """execute() 继承自父类，正常工作。"""

@@ -88,11 +88,11 @@ class TestExplainRouteOutput:
         assert code == 0
         assert "bridge:" in out
 
-    def test_group_shown_in_decision(self):
-        """Decision 区块显示 group（healthy/degraded/fallback）。"""
+    def test_strategy_shown_in_decision(self):
+        """Decision 区块显示 strategy。"""
         code, out, _ = _run_explain_route("write code")
         assert code == 0
-        assert "Group:" in out
+        assert "Strategy:" in out
 
 
 class TestExplainRouteEdgeCases:
@@ -163,7 +163,8 @@ class TestExplainRouteJSON:
         code, out, _ = _run_explain_route("write code", ["--json"])
         assert code == 0
         data = json.loads(out)
-        assert "version" in data
+        assert "schema_version" in data
+        assert "runtime_version" in data
         assert "task" in data
         assert "capabilities" in data
         assert "candidates" in data

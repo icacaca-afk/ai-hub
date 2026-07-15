@@ -129,14 +129,16 @@ class ScoreRouter(HealthAwareRouter):
                         if self.quota is None or not self.quota.exhausted(fb.name):
                             self.last_route_reason = {
                                 "selected": fb.name,
-                                "group": "fallback",
+                                "strategy": "fallback",
+                                "reason": "no_healthy_provider",
                                 "skipped": skipped,
                             }
                             self.last_scores = []
                             return fb
             self.last_route_reason = {
                 "selected": None,
-                "reason": "all providers unavailable or exhausted",
+                "strategy": "none",
+                "reason": "all_providers_unavailable_or_exhausted",
                 "skipped": skipped,
             }
             self.last_scores = []
@@ -155,7 +157,8 @@ class ScoreRouter(HealthAwareRouter):
         if not scores:
             self.last_route_reason = {
                 "selected": None,
-                "reason": "all providers quota exhausted",
+                "strategy": "none",
+                "reason": "all_providers_quota_exhausted",
                 "skipped": skipped,
             }
             self.last_scores = []
@@ -169,7 +172,8 @@ class ScoreRouter(HealthAwareRouter):
 
         self.last_route_reason = {
             "selected": best_provider.name,
-            "group": "score",
+            "strategy": "score",
+            "reason": "highest_score",
             "score": round(best_score.total, 1),
             "skipped": skipped,
         }

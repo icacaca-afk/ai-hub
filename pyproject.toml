@@ -16,6 +16,7 @@ build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-k \"not slow\"')",
+    "live: marks tests as requiring live providers (deselect with '-m \"not live\"')",
 ]
 
 [tool.setuptools]
