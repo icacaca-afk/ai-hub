@@ -20,7 +20,8 @@ if sys.platform == "win32":
 from core.registry import CapabilityRegistry
 from core.task import Task
 from core.history import HistoryStore
-from router.router import Router
+from core.health_registry import HealthRegistry
+from router.score_router import ScoreRouter
 from cli.explain_route import cmd_explain_route
 
 
@@ -69,7 +70,8 @@ def cmd_ask(args: list[str]) -> None:
     registry = _build_registry()
     from core.quota import QuotaManager
     quota = QuotaManager()
-    router = Router(registry, quota_manager=quota)
+    hr = HealthRegistry()
+    router = ScoreRouter(registry, quota_manager=quota, health_registry=hr)
     history = HistoryStore()
 
     # 创建 Task
@@ -88,6 +90,11 @@ def cmd_ask(args: list[str]) -> None:
     print(f"[Router] Provider:     {provider.display_name}")
     bridge = provider.select_bridge(task)
     print(f"[Router] Bridge:       {type(bridge).__name__}")
+    # 展示评分（如果有）
+    if router.last_scores:
+        scores = router.last_scores
+        best = scores[0]
+        print(f"[Router] Score:        {best.total:.1f} (cap={best.capability_score:.0f} health={best.health_score:.0f} pri={best.priority_score:.0f} lat={best.latency_score:.0f} quota={best.quota_score:.0f})")
     print()
 
     # 执行

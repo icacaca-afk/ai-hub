@@ -16,7 +16,7 @@ from core.registry import CapabilityRegistry
 from core.task import Task
 from core.health_registry import HealthRegistry
 from core.quota import QuotaManager
-from router.health_router import HealthAwareRouter
+from router.score_router import ScoreRouter
 
 
 def cmd_explain_route(args: list[str]) -> None:
@@ -45,7 +45,7 @@ def cmd_explain_route(args: list[str]) -> None:
     registry = _build_registry()
     quota = QuotaManager()
     hr = HealthRegistry()
-    router = HealthAwareRouter(registry, quota_manager=quota, health_registry=hr)
+    router = ScoreRouter(registry, quota_manager=quota, health_registry=hr)
 
     task = Task.from_text(text)
 
@@ -59,16 +59,16 @@ def cmd_explain_route(args: list[str]) -> None:
     reason = router.last_route_reason
 
     if json_output:
-        _output_json(text, caps, candidates, reports, selected, reason, quota)
+        _output_json(text, caps, candidates, reports, selected, reason, quota, router)
         return
 
-    _output_human(text, caps, candidates, reports, selected, reason, quota)
+    _output_human(text, caps, candidates, reports, selected, reason, quota, router)
 
 
-def _output_human(text, caps, candidates, reports, selected, reason, quota):
+def _output_human(text, caps, candidates, reports, selected, reason, quota, router):
     """人类可读格式输出。"""
     # ── 输出 ──
-    print("AI Hub Route Explanation v0.7.1")
+    print("AI Hub Route Explanation v0.8")
     print()
     print(f"Task:")
     print(f"  {text}")
@@ -107,14 +107,24 @@ def _output_human(text, caps, candidates, reports, selected, reason, quota):
         # Bridge type
         bridge_name = type(p.bridge).__name__
         print(f"    bridge:   {bridge_name}")
+
+        # Score（如果有）
+        if hasattr(router, 'last_scores') and router.last_scores:
+            for s in router.last_scores:
+                if s.provider_name == p.name:
+                    print(f"    score:    {s.total:.1f} (cap={s.capability_score:.0f} health={s.health_score:.0f} pri={s.priority_score:.0f} lat={s.latency_score:.0f} quota={s.quota_score:.0f})")
+                    break
         print()
 
     # ── Decision ──
     print("Decision:")
     if selected:
         group = reason.get("group", "?")
+        score_val = reason.get("score", "?")
         print(f"  Selected:  {selected.name}")
         print(f"  Group:     {group}")
+        if score_val != "?":
+            print(f"  Score:     {score_val}")
     else:
         print(f"  Selected:  (none)")
         print(f"  Reason:    {reason.get('reason', 'unknown')}")
@@ -129,10 +139,10 @@ def _output_human(text, caps, candidates, reports, selected, reason, quota):
     print()
 
 
-def _output_json(text, caps, candidates, reports, selected, reason, quota):
+def _output_json(text, caps, candidates, reports, selected, reason, quota, router):
     """机器可读 JSON 格式输出。"""
     output = {
-        "version": "v0.7.1",
+        "version": "v0.8",
         "task": text,
         "capabilities": list(caps),
         "candidates": [],
@@ -155,6 +165,12 @@ def _output_json(text, caps, candidates, reports, selected, reason, quota):
             entry["message"] = r.message
         if r and r.latency_ms is not None:
             entry["latency_ms"] = r.latency_ms
+        # Score
+        if hasattr(router, 'last_scores') and router.last_scores:
+            for s in router.last_scores:
+                if s.provider_name == p.name:
+                    entry["score"] = s.to_dict()
+                    break
         output["candidates"].append(entry)
 
     if selected:
