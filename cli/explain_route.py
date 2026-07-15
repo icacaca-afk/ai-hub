@@ -112,7 +112,7 @@ def _output_human(text, caps, candidates, reports, selected, reason, quota, rout
         if hasattr(router, 'last_scores') and router.last_scores:
             for s in router.last_scores:
                 if s.provider_name == p.name:
-                    print(f"    score:    {s.total:.1f} (cap={s.capability_score:.0f} health={s.health_score:.0f} pri={s.priority_score:.0f} lat={s.latency_score:.0f} quota={s.quota_score:.0f})")
+                    print(f"    score:    {s.total:.1f} (capability={s.capability_score:.0f} health={s.health_score:.0f} priority={s.priority_score:.0f} latency={s.latency_score:.0f} quota={s.quota_score:.0f})")
                     break
         print()
 

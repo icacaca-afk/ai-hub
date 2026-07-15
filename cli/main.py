@@ -94,7 +94,7 @@ def cmd_ask(args: list[str]) -> None:
     if router.last_scores:
         scores = router.last_scores
         best = scores[0]
-        print(f"[Router] Score:        {best.total:.1f} (cap={best.capability_score:.0f} health={best.health_score:.0f} pri={best.priority_score:.0f} lat={best.latency_score:.0f} quota={best.quota_score:.0f})")
+        print(f"[Router] Score:        {best.total:.1f} (capability={best.capability_score:.0f} health={best.health_score:.0f} priority={best.priority_score:.0f} latency={best.latency_score:.0f} quota={best.quota_score:.0f})")
     print()
 
     # 执行
