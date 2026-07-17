@@ -32,7 +32,7 @@ if sys.platform == "win32":
 from core.task import Task
 from core.quota import QuotaManager
 from core.health_registry import HealthRegistry
-from router.score_router import ScoreRouter
+from router.metrics_router import MetricsRouter
 from planner.executor import PlanExecutor
 from planner.event_bus import EventBus
 from planner.plan_store import PlanStore, DEFAULT_STORE_SIZE
@@ -138,7 +138,7 @@ def cmd_plan(args: list[str]) -> None:
     registry = _build_registry()
     quota = QuotaManager()
     hr = HealthRegistry()
-    router = ScoreRouter(registry, quota_manager=quota, health_registry=hr)
+    router = MetricsRouter(registry, quota_manager=quota, health_registry=hr)
 
     # Planner 选择：--llm 用 LLMPlanner（共享同一 Router），否则 RuleBasedPlanner（ADR-0015）
     if use_llm:
@@ -178,7 +178,7 @@ def _print_json_output(task: Task, result) -> None:
     """V0.9.4: 输出结构化 JSON（ADR-0016 + ADR-0017 schema）。"""
     # 安全序列化：Result.metadata 是 dict，Result.to_dict() 处理嵌套
     payload = {
-        "version": "0.9.5",
+        "version": "0.9.6",
         "task": {
             "text": task.content,
             "task_id": task.task_id,
@@ -198,7 +198,7 @@ def _print_json_output(task: Task, result) -> None:
 
 def _print_human_output(text: str, result) -> None:
     """V0.9.4 人类可读输出（V0.9.1 格式 + V0.9.4 schema_version/aggregate_metrics）。"""
-    print("AI Hub Plan — v0.9.5")
+    print("AI Hub Plan — v0.9.6")
     print()
     print("Task:")
     print(f"  {text}")

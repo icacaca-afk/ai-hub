@@ -138,18 +138,29 @@ class PlanExecutor:
             step.execution_result = result
             step.status = "success" if result.is_success else "failed"
 
-            # V0.9.4: emit provider_finished（携带 latency_ms）
+            # V0.9.6: 从 Result.metadata 提取 server_metrics（token/cost，ADR-0019）
+            server_metrics = result.metadata.get("server_metrics", {})
+
+            # V0.9.4: emit provider_finished（携带 latency_ms + V0.9.6 server_metrics）
             self._emit_event(
                 "provider_finished",
                 plan_id=plan.plan_id,
                 step_id=step.step_id,
                 provider=result.provider,
                 latency_ms=provider_latency_ms,
-                data={"status": result.status},
+                data={
+                    "status": result.status,
+                    "server_metrics": server_metrics,
+                },
             )
 
-            # V0.9.4: 填 step.execution_metrics（仅 latency_ms，token/cost 留 V0.9.5+）
-            step.execution_metrics = ExecutionMetrics(latency_ms=provider_latency_ms)
+            # V0.9.6: 填 step.execution_metrics（latency_ms + token_in/out + cost_usd）
+            step.execution_metrics = ExecutionMetrics(
+                latency_ms=provider_latency_ms,
+                token_in=server_metrics.get("token_in", 0),
+                token_out=server_metrics.get("token_out", 0),
+                cost_usd=server_metrics.get("cost_usd", 0.0),
+            )
 
             # V0.9.4: emit step_finished
             self._emit_event(

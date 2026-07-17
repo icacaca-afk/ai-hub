@@ -123,7 +123,7 @@ class _FakeExecutorSingleStep:
 
 
 def _patch_plan_module_deps(monkeypatch):
-    """Patch cmd_plan 的所有真实依赖（QuotaManager / ScoreRouter / _build_registry / HealthRegistry）。"""
+    """Patch cmd_plan 的所有真实依赖（QuotaManager / MetricsRouter / _build_registry / HealthRegistry）。"""
     from cli import plan as plan_module
     from router import score_router
     from core import quota as quota_module
@@ -133,7 +133,7 @@ def _patch_plan_module_deps(monkeypatch):
     monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
     monkeypatch.setattr(plan_module, "QuotaManager", _FakeQuota)
     monkeypatch.setattr(plan_module, "HealthRegistry", _FakeHealth)
-    monkeypatch.setattr(plan_module, "ScoreRouter", _FakeRouter)
+    monkeypatch.setattr(plan_module, "MetricsRouter", _FakeRouter)
     monkeypatch.setattr(plan_module, "_build_registry", lambda: _FakeRegistry())
 
 
@@ -200,14 +200,14 @@ class TestCliPlanExecution:
         assert "[Step 1:" in captured.out
 
     def test_plan_version_in_output(self, monkeypatch, capsys):
-        """输出含 v0.9.5 版本标识。"""
+        """输出含 v0.9.6 版本标识。"""
         from cli import plan as plan_module
         _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello"])
         captured = capsys.readouterr()
 
-        assert "v0.9.5" in captured.out
+        assert "v0.9.6" in captured.out
 
     def test_plan_consumes_only_result_not_executor_internals(self, monkeypatch, capsys):
         """CLI 只消费 Result，不访问 Planner 内部（ADR-0014 架构约束）。

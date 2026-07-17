@@ -96,7 +96,7 @@ def _list_executions(json_output: bool, limit: int) -> None:
 
     if json_output:
         payload = {
-            "version": "0.9.5",
+            "version": "0.9.6",
             "source": "sqlite",
             "db_path": str(store.db_path),
             "count": len(executions),
@@ -106,7 +106,7 @@ def _list_executions(json_output: bool, limit: int) -> None:
         return
 
     # 人类可读
-    print("AI Hub Execution History — v0.9.5 (SQLite)")
+    print("AI Hub Execution History — v0.9.6 (SQLite)")
     print()
     print(f"Recent Executions: {len(executions)}")
     print()
@@ -137,7 +137,7 @@ def _show_timeline(plan_id: str, json_output: bool) -> None:
 
     if json_output:
         payload = {
-            "version": "0.9.5",
+            "version": "0.9.6",
             "source": "sqlite",
             "db_path": str(store.db_path),
             "plan_id": plan_id,
@@ -152,7 +152,7 @@ def _show_timeline(plan_id: str, json_output: bool) -> None:
 
 def _print_timeline_human(plan_id: str, events: list) -> None:
     """人类可读 Timeline 视图（参考 cli/trace.py 格式）。"""
-    print("AI Hub Execution History — v0.9.5 (SQLite)")
+    print("AI Hub Execution History — v0.9.6 (SQLite)")
     print()
     print(f"Plan: {plan_id}")
     print(f"Events: {len(events)}")
@@ -203,7 +203,14 @@ def _describe_event(event) -> str:
         return f"provider_selected  ({event.provider or '?'})"
     elif type_ == "provider_finished":
         lat = event.latency_ms if event.latency_ms is not None else "?"
-        return f"provider_finished  ({event.provider}, {lat}ms, {data.get('status', '?')})"
+        sm = data.get("server_metrics", {})
+        parts = [f"provider_finished  ({event.provider or '?'}, {lat}ms, {data.get('status', '?')})"]
+        if sm:
+            token_in = sm.get("token_in", 0)
+            token_out = sm.get("token_out", 0)
+            cost = sm.get("cost_usd", 0.0)
+            parts.append(f"  in={token_in} out={token_out} ≈${cost:.4f}")
+        return "".join(parts)
     elif type_ == "step_finished":
         idx = (event.step_id or "").replace("step-", "")
         lat = data.get("latency_ms", "?")

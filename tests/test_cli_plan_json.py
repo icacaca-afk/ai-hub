@@ -54,7 +54,7 @@ def _patch_plan_module_deps(monkeypatch):
 
     monkeypatch.setattr(plan_module, "QuotaManager", _FakeQuota)
     monkeypatch.setattr(plan_module, "HealthRegistry", _FakeHealth)
-    monkeypatch.setattr(plan_module, "ScoreRouter", _FakeRouter)
+    monkeypatch.setattr(plan_module, "MetricsRouter", _FakeRouter)
     monkeypatch.setattr(plan_module, "_build_registry", lambda: _FakeRegistry())
 
 
@@ -116,7 +116,7 @@ class TestCliPlanJson:
         plan_module.cmd_plan(["hello", "--json"])
         data = json.loads(capsys.readouterr().out)
 
-        assert data["version"] == "0.9.5"
+        assert data["version"] == "0.9.6"
         assert "task" in data
         assert "plan" in data
         assert data["task"]["text"] == "hello"
@@ -188,7 +188,7 @@ class TestCliPlanJson:
         captured = capsys.readouterr()
 
         data = json.loads(captured.out)
-        assert data["version"] == "0.9.5"
+        assert data["version"] == "0.9.6"
 
     def test_no_human_output_when_json(self, monkeypatch, capsys):
         """--json 模式不应输出人类可读文本。"""
