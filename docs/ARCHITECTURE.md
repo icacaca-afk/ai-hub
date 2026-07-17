@@ -1,10 +1,11 @@
 # AI Hub — Architecture Overview
 
-> **版本**：v1.0.0（Draft，V1.0 启动前置）
-> **状态**：Draft（待 ChatGPT 外部审核）
+> **版本**：v1.0.0（Accepted，V1.0 启动前置）
+> **状态**：Accepted（ChatGPT 外部审核 10.0/10 FINAL APPROVED）
 > **日期**：2026-07-17
 > **重要性**：文档体系总入口
 > **触发建议**：[Runtime Contract ChatGPT Review](reviews/runtime-contract-chatgpt-review.md) — ChatGPT Q7 建议在 V1.0 启动时增加 ARCHITECTURE.md
+> **本版审核**：[ARCHITECTURE.md ChatGPT Review](reviews/architecture-chatgpt-review.md) — 10.0/10 FINAL APPROVED
 
 ## 目的
 
@@ -29,46 +30,128 @@ AI Hub 是一个 **AI Runtime**（不是简单的 AI Gateway 或 Provider Router
 - **Capability Routing**（不是 Provider Routing）
 - **Workflow Runtime on ExecutionEvent**（V1.0 主题）
 
-**与 OmniRoute / 类似项目的区别**：
+**与 OmniRoute / 类似项目的区别**（ChatGPT Q3 弱化为 Related Runtime Patterns）：
 
-| 维度 | AI Hub | OmniRoute / Gateway 类项目 |
-|------|--------|--------------------------|
-| 第一公民 | **Task** | Provider |
-| 核心抽象 | **ExecutionEvent** | HTTP Request |
-| 路由逻辑 | **Capability → Provider** | Provider → Model |
-| 扩展点 | **Bridge**（HTTP / CLI / GUI / Browser / Future） | HTTP Endpoint |
-| 可观察性 | **Event Stream + Statistics Projection** | Log + Metric |
-| Workflow 支持 | **V1.0 on ExecutionEvent** | 无 |
+| 模式 | 例子 | 第一公民 | 路由 | 可观察性 |
+|------|------|---------|------|---------|
+| **AI Runtime**（AI Hub） | 本项目 | Task | Capability → Provider | Event Stream + Statistics |
+| Gateway / Proxy | OmniRoute / LiteLLM | Provider | Provider → Model | Log + Metric |
+| Workflow Engine | Airflow / Temporal | DAG Node | Static Topology | Job Status |
+| Agent Framework | LangChain / AutoGen | Agent | Memory + Tool | Trace + Step |
 
 > AI Hub 不与 OmniRoute 类项目竞争；可以将 OmniRoute 当作一个 Provider（`OmniRouteProvider`），通过 `APIBridge` 调用其 160+ Provider 聚合能力。详见 ADR-0025（V1.x 评估）。
 
-## 2. 架构图
+## 1.5 Typical Use Cases（典型用法）
 
-### 2.1 核心数据流（V0.9.7 现状）
+帮助读者 5 分钟理解：AI Hub 到底解决什么问题（ChatGPT Q8 采纳）。
+
+### Use Case 1：单次 AI 调用
+
+```bash
+$ ai-hub ask "写一个 Python 快速排序"
+```
+
+内部流程：
+```
+ask "写一个 Python 快速排序"
+    │
+    ▼
+Task(capabilities=["code_generation"], input=...)
+    │
+    ▼
+Router.route() → openai_api Provider
+    │
+    ▼
+APIBridge.run() → BridgeResult(output=..., raw=...)
+    │
+    ▼
+Result(output=...)
+```
+
+### Use Case 2：多步 Plan 执行
+
+```bash
+$ ai-hub plan "分析 CSV 销售数据并生成图表"
+```
+
+内部流程：
+```
+plan "分析 CSV 销售数据并生成图表"
+    │
+    ▼
+LLMPlanner → Plan(steps=[
+    读取 CSV 文件
+    统计分析（使用 code execution）
+    生成图表描述
+    用 Vision Provider 生成图表
+])
+    │
+    ▼
+PlanExecutor.execute(plan)
+    │
+    ├─ Step 1: read_csv (Capability: file_io)
+    ├─ Step 2: analyze (Capability: code_execution)
+    ├─ Step 3: describe_chart (Capability: code_generation)
+    └─ Step 4: generate_image (Capability: vision)
+    │
+    ▼
+ExecutionEvent 流（每 Step 4-6 events）
+    │
+    ├─────► ai-hub trace    (Memory)
+    └─────► ai-hub history  (SQLite 持久化)
+    └─────► ai-hub stats    (Statistics Projection)
+```
+
+### Use Case 3：历史查询 + 成本分析
+
+```bash
+$ ai-hub stats
+Plans: 5 total
+  Success: 4 (80.0%)
+  Failed:  1 (20.0%)
+Providers:
+  openai_api            12 calls  avg 450ms  est. $0.025
+Total Estimated Cost: $0.025
+```
+
+### Use Case 4：Provider 融合（V1.x ADR-0025）
+
+```bash
+# 配置 OmniRoute 作为 Provider
+$ ai-hub config provider add omniroute --url http://localhost:20128/v1
+
+# Task 自动选择 OmniRoute（聚合 160+ Provider）
+$ ai-hub ask "Explain quantum entanglement"
+# Task → Capability Router → OmniRouteProvider → APIBridge → OmniRoute → Gemini (免费)
+```
+
+## 2. 架构图（ChatGPT 拆分建议：Static Architecture vs Runtime Flow）
+
+### 2.1 Static Architecture（组件视图）
 
 ```
                  ┌─────────────────────────────────────┐
-                 │           Task                      │
-                 │  (capabilities, input, priority)    │
+                 │              CLI                    │
+                 │   (ask / plan / inspect / trace /   │
+                 │    history / stats)                 │
                  └──────────────┬──────────────────────┘
                                 │
                                 ▼
                 ┌───────────────────────────────────┐
-                │          Planner                  │
+                │           Planner                │
                 │  (RuleBasedPlanner / LLMPlanner)  │
                 └──────────────┬────────────────────┘
-                               │ Plan (ordered Steps)
+                               │ Plan (Steps)
                                ▼
                 ┌───────────────────────────────────┐
                 │         PlanExecutor              │
-                │  (orchestrates Step execution)    │
                 └───┬─────────────────────────┬─────┘
                     │                         │
         ┌───────────▼──────────┐  ┌──────────▼──────────┐
-        │  Capability Router   │  │      EventBus       │
-        │  (ScoreRouter /      │  │  (synchronous fan-  │
-        │   HealthRouter /     │  │   out)              │
-        │   MetricsRouter)     │  └─┬─────────┬─────────┘
+        │     Router(s)        │  │      EventBus       │
+        │  (ScoreRouter        │  │                     │
+        │   HealthRouter       │  └─┬─────────┬─────────┘
+        │   MetricsRouter*)    │    │         │
         └───────────┬──────────┘    │         │
                     │               │         │
                     ▼               ▼         ▼
@@ -92,11 +175,40 @@ AI Hub 是一个 **AI Runtime**（不是简单的 AI Gateway 或 Provider Router
                                       ┌────────────────────┐
                                       │  Execution         │
                                       │  Statistics        │
-                                      │  + ai-hub stats    │
                                       └────────────────────┘
+
+* MetricsRouter 是 V0.9.6 临时层，V1.0 由 ExecutionPipeline 替代
 ```
 
-### 2.2 V1.0 路线（ExecutionPipeline on ExecutionEvent）
+### 2.2 Runtime Flow（数据流视图，V0.9.7 现状）
+
+```
+PlanExecutor
+    │
+    ├─ emit("plan_started")
+    ├─ emit("step_started")
+    ├─ emit("provider_selected")
+    ├─ emit("provider_finished", data={"server_metrics": ...})
+    ├─ emit("step_finished")
+    └─ emit("plan_finished")
+              │
+              ▼
+         EventBus (synchronous fan-out)
+              │
+              ├─────► InMemoryTraceCollector (Memory, 进程级)
+              │
+              └─────► SQLiteExecutionStore (持久化, 跨进程)
+                          │
+                          ▼
+                    query_events()  ←  canonical query interface
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+         history              StatisticsCollector
+         (Convenience)        (Read-Only Projection)
+```
+
+### 2.3 V1.0 路线（ExecutionPipeline on ExecutionEvent）
 
 ```
 V0.9.7 现状                              V1.0 目标
@@ -276,6 +388,21 @@ ARCHITECTURE.md（本文件，V1.0 新增）
     │
     ├── PROVIDER_SPEC.md   → Provider 实现规范
     │
+    ├── GLOSSARY.md        → 术语表（V1.0 新增，ChatGPT Q6 建议）
+    │   - 统一 Task / Plan / Step / ExecutionEvent / ExecutionMetrics
+    │   - server_metrics / Bridge / Provider / Capability / Pipeline
+    │
+    ├── DEVELOPMENT.md     → 开发指南（V1.0 新增，ChatGPT Q6 建议）
+    │   - 如何新增 Provider
+    │   - 如何新增 Bridge
+    │   - 如何新增 CLI
+    │   - 如何新增 Consumer
+    │
+    ├── TESTING.md         → 测试指南（V1.0 新增，ChatGPT Q6 建议）
+    │   - 测试分层：Unit / Integration / CLI / External
+    │   - 测试隔离（tmp_path / env）
+    │   - 性能基线
+    │
     ├── docs/adr/          → 历史决策记录
     │   ├── ADR-0008 (Core Freeze)
     │   ├── ADR-0017 (Execution Event)
@@ -283,9 +410,7 @@ ARCHITECTURE.md（本文件，V1.0 新增）
     │   ├── ADR-0019 (Provider Metrics)
     │   └── ADR-0020 (Execution Analytics)
     │
-    ├── docs/reviews/      → ChatGPT 外部审核记录
-    │
-    └── Glossary           → V1.0 评估（ChatGPT Q7 建议）
+    └── docs/reviews/      → ChatGPT 外部审核记录
 ```
 
 ## 8. V1.0 路线图
@@ -320,15 +445,39 @@ ADR (Proposed) → ChatGPT 审核 → 编码 → 测试 → ChatGPT 代码审核
 | V0.9.6 | Provider Metrics | 9.95/10 | 10.0/10 (Final) |
 | V0.9.7 | Execution Analytics | 9.95/10 | 10.0/10 (Final) |
 | **Runtime Contract** | **运行时约定** | — | **10.0/10 (Final)** |
-| **ARCHITECTURE.md** | **文档体系入口** | — | **Draft（待审核）** |
+| **ARCHITECTURE.md** | **文档体系入口** | — | **10.0/10 (Final)** |
 
 **V0.9.x Runtime Observability 阶段 + 运行时约定层 + 文档体系入口全部就绪。**
 
 V1.0 Workflow Runtime 启动前置条件已满足。
 
+### 9.1 Next Milestone（ChatGPT Q7 采纳）
+
+**V1.0 Goal（核心能力）**：
+
+- **Execution Pipeline**（Decorator 替代 Router 子类层级）
+- **Retry Policy**（Failure-Driven Retry on ExecutionEvent）
+- **Checkpoint / Resume**（基于 ExecutionEvent 流回放）
+- **Condition / Branching**（事件驱条件分支）
+
+**V1.0 Achievement（验证标准）**：
+
+- 用户可定义 `if step_fails: retry 3 times with backoff`
+- 用户可定义 `on condition A: branch to plan B`
+- Plan 失败后从断点恢复
+- 这些全部基于 ExecutionEvent，**不修改 Runtime Contract**
+
+**为什么 V0.9 到这里结束**：
+
+- 运行时模型已稳定（ExecutionEvent / EventBus / Store / Statistics）
+- 观测能力已闭环（Trace / SQLite / Metrics / Statistics）
+- 架构与约束已文档化（Runtime Contract / ARCHITECTURE.md）
+- V1.0 启动条件已满足
+
 ## 10. 后续
 
-- 本文档（ARCHITECTURE.md）完成后发 ChatGPT 外部审核
-- 通过后作为 V1.0 正式基线文档
+- 本文档（ARCHITECTURE.md）已通过 ChatGPT 外部审核（10.0/10 FINAL APPROVED）
+- 作为 V1.0 正式基线文档
+- V1.0 启动时新增 GLOSSARY.md / DEVELOPMENT.md / TESTING.md（ChatGPT Q6 建议）
 - 后续 V1.0.1~V1.0.4 每个新能力单独 ADR
-- 文档体系如有扩展（Glossary / Workflow Contract）单独走 ADR 流程
+- 文档体系如有扩展单独走 ADR 流程
