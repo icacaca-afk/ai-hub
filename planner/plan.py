@@ -1,0 +1,77 @@
+# AI Hub — Plan / Step dataclass
+# V0.9: 多步任务分解的数据载体
+#
+# Plan 是 Step 的有序集合，Step 是子任务的载体。
+# Step 复用 Task 的字段语义（content/capabilities/context），但不继承 Task——
+# 避免污染冻结的 Task 抽象（ADR-0008）。
+#
+# ADR-0013: V0.9.0 骨架。depends_on 字段仅记录不消费，为 V0.10+ DAG 留接口。
+#
+# API Stability: Experimental
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from core.result import Result
+
+
+@dataclass
+class Step:
+    """子任务载体。
+
+    Plan 中的一个步骤，独立路由、独立执行。
+    V0.9.0：depends_on 仅记录线性依赖，执行器不消费。
+
+    API Stability: Experimental
+    """
+
+    step_id: str                                                # 形如 "step-0"
+    content: str                                                # 子任务自然语言描述
+    capabilities: list[str] = field(default_factory=list)       # 能力标签（由 classify 识别）
+    depends_on: list[str] = field(default_factory=list)         # 依赖的前置 step_id（V0.9.0 仅记录）
+    context: dict[str, Any] = field(default_factory=dict)       # 子任务上下文
+    status: str = "pending"                                     # pending / running / success / failed / skipped
+    result: Optional[Result] = None                             # 执行后填入
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step_id": self.step_id,
+            "content": self.content,
+            "capabilities": self.capabilities,
+            "depends_on": self.depends_on,
+            "status": self.status,
+            "result": self.result.to_dict() if self.result else None,
+        }
+
+
+@dataclass
+class Plan:
+    """Plan = 有序 Step 集合。
+
+    由 Planner.decompose() 产生，由 PlanExecutor 顺序执行。
+
+    API Stability: Experimental
+    """
+
+    plan_id: str                                                # 唯一标识符
+    task_id: str                                                # 关联的原 Task.task_id
+    steps: list[Step]
+    status: str = "pending"                                     # pending / running / success / partial / failed
+    created_at: str = ""                                        # ISO 时间戳
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plan_id": self.plan_id,
+            "task_id": self.task_id,
+            "status": self.status,
+            "created_at": self.created_at,
+            "steps": [s.to_dict() for s in self.steps],
+            "metadata": self.metadata,
+        }
+
+    @property
+    def step_count(self) -> int:
+        return len(self.steps)
