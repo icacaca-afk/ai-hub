@@ -1,10 +1,11 @@
 # ADR-0015: LLM Planner & Planner 语义原则
 
-- **状态**: Proposed
+- **状态**: Accepted（ChatGPT 外部审核 9.95/10 APPROVED）
 - **日期**: 2026-07-17
 - **里程碑**: V0.9.2
 - **关联**: ADR-0008（Core Freeze）、ADR-0013（Planner 骨架）、ADR-0014（CLI + metadata 分层）
 - **API Stability**: Experimental
+- **ChatGPT 审核**: 9.95/10 APPROVED（2026-07-17）
 
 ## 背景
 
@@ -403,4 +404,35 @@ RuleBasedPlanner │ LLMPlanner │ WebPlanner │ ...
 - `planner/llm_planner.py` ✅ 新增（本 ADR 核心）
 - `planner/prompts.py` ✅ 新增（Prompt 模板，独立文件）
 - `planner/plan_validator.py` ✅ 新增（PlanValidator，与 Planner 解耦）
+
+## ChatGPT 外部审核结果（2026-07-17）
+
+**评分**: 9.95 / 10 — **APPROVED**
+
+**逐项评分**:
+| 项目 | 评分 |
+|------|------|
+| Core Freeze | 10/10 |
+| Planner 抽象 | 10/10 |
+| LLM 降级链 | 10/10 |
+| Validator 解耦 | 10/10 |
+| Prompt 分层 | 10/10 |
+| 测试覆盖 | 10/10 |
+| CLI 设计 | 9.5/10 |
+| 可扩展性 | 10/10 |
+| 长期维护性 | 10/10 |
+
+**6 个确认问题回复摘要**:
+1. **Router 共享**：应该共享，Runtime 只有一个 Router。未来若 Router 开始缓存状态需明确标注 Thread Safe。
+2. **metadata 降级记录**：赞同保持干净，降级走日志。未来 Execution History 记 planner_trace（Runtime Trace），不进 Metadata。
+3. **MAX_STEPS=32**：合理，但建议改为 `DEFAULT_MAX_STEPS` 常量（非 Magic Number），未来可接 CLI `--max-steps` 或 Config。
+4. **不支持 DAG**：一点都不保守，是最正确的边界。Planner/Executor/Workflow 是三个不同层。
+5. **Prompt Version**：V1.0 必须做，建议 ADR 现在就预留。Execution History 应记录 Planner / Prompt Version / Model / Temperature。
+6. **下一步**：不跳 DAG。建议 V0.9.3 CLI 完整化 → V0.9.4 Execution Trace → V0.10 DAG Executor。
+
+**非阻塞建议（供后续版本参考）**:
+- **建议一**：Planner Capability 抽象 — 未来用 `planner.decompose` 而非 `general.chat`，避免聊天模型和 Planner 模型绑死。
+- **建议二**：PromptBuilder 模式 — 未来 Prompt 越来越长时，用 Builder 模式（System / Instruction / Examples / Output Schema）替代字符串模板。
+- **建议三**：`DEFAULT_MAX_STEPS` 常量命名 — 替代 `MAX_STEPS` Magic Number。
+- **建议四**：未来 Router 若引入状态缓存需标注 Thread Safe。
 
