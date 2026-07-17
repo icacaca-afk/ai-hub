@@ -23,6 +23,7 @@ class Step:
 
     Plan 中的一个步骤，独立路由、独立执行。
     V0.9.0：depends_on 仅记录线性依赖，执行器不消费。
+    V0.9.0：execution_result 字段名预留扩展，为 V0.10+ 重试/execution_history 留空间。
 
     API Stability: Experimental
     """
@@ -33,7 +34,7 @@ class Step:
     depends_on: list[str] = field(default_factory=list)         # 依赖的前置 step_id（V0.9.0 仅记录）
     context: dict[str, Any] = field(default_factory=dict)       # 子任务上下文
     status: str = "pending"                                     # pending / running / success / failed / skipped
-    result: Optional[Result] = None                             # 执行后填入
+    execution_result: Optional[Result] = None                  # 执行后填入（为 V0.10+ 重试/execution_history 预留）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,7 +43,7 @@ class Step:
             "capabilities": self.capabilities,
             "depends_on": self.depends_on,
             "status": self.status,
-            "result": self.result.to_dict() if self.result else None,
+            "execution_result": self.execution_result.to_dict() if self.execution_result else None,
         }
 
 

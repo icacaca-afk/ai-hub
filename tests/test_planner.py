@@ -200,7 +200,7 @@ class TestPlanStepDataclass:
         assert step.depends_on == []
         assert step.context == {}
         assert step.status == "pending"
-        assert step.result is None
+        assert step.execution_result is None
 
     def test_step_to_dict(self):
         """Step.to_dict()。"""
@@ -211,16 +211,16 @@ class TestPlanStepDataclass:
         assert d["content"] == "hello"
         assert d["capabilities"] == ["general.chat"]
         assert d["status"] == "pending"
-        assert d["result"] is None
+        assert d["execution_result"] is None
 
     def test_step_to_dict_with_result(self):
         """Step.to_dict() 带 Result。"""
         result = Result(provider="fake", status="success", output="ok")
-        step = Step(step_id="step-0", content="hello", result=result)
+        step = Step(step_id="step-0", content="hello", execution_result=result)
         d = step.to_dict()
 
-        assert d["result"] is not None
-        assert d["result"]["provider"] == "fake"
+        assert d["execution_result"] is not None
+        assert d["execution_result"]["provider"] == "fake"
 
     def test_plan_to_dict(self):
         """Plan.to_dict()。"""
@@ -262,9 +262,10 @@ class TestPlanExecutor:
         assert result.is_success
         assert result.provider == "planner"
         assert "done" in result.output
-        assert result.metadata["step_count"] == 2
-        assert result.metadata["success_count"] == 2
-        assert result.metadata["failed_count"] == 0
+        assert result.metadata["steps"] == 2
+        assert result.metadata["success"] == 2
+        assert result.metadata["failed"] == 0
+        assert result.metadata["plan_status"] == "success"
 
     def test_all_failed(self):
         """全 failed → Plan status=failed，Result status=failed。"""
@@ -278,8 +279,9 @@ class TestPlanExecutor:
 
         assert result.status == "failed"
         assert not result.is_success
-        assert result.metadata["failed_count"] == 2
-        assert result.metadata["success_count"] == 0
+        assert result.metadata["failed"] == 2
+        assert result.metadata["success"] == 0
+        assert result.metadata["plan_status"] == "failed"
         assert result.error is not None
 
     def test_mixed_partial(self):
@@ -294,8 +296,9 @@ class TestPlanExecutor:
         result = executor.execute(task)
 
         assert result.status == "partial"
-        assert result.metadata["success_count"] == 1
-        assert result.metadata["failed_count"] == 1
+        assert result.metadata["success"] == 1
+        assert result.metadata["failed"] == 1
+        assert result.metadata["plan_status"] == "partial"
 
     def test_single_step_equivalent_to_router(self):
         """单步 Plan 等价于直接走 Router（退化场景）。"""
@@ -308,7 +311,7 @@ class TestPlanExecutor:
         result = executor.execute(task)
 
         assert result.status == "success"
-        assert result.metadata["step_count"] == 1
+        assert result.metadata["steps"] == 1
         assert "hello back" in result.output
         assert len(router.calls) == 1
 
@@ -377,7 +380,7 @@ class TestPlanExecutor:
         result = executor.execute(task)
 
         # 自定义 planner 不切分，只有 1 步
-        assert result.metadata["step_count"] == 1
+        assert result.metadata["steps"] == 1
         assert executor.last_plan.plan_id == "custom"
 
     def test_step_status_updated(self):
@@ -394,8 +397,8 @@ class TestPlanExecutor:
         steps = executor.last_plan.steps
         assert steps[0].status == "success"
         assert steps[1].status == "failed"
-        assert steps[0].result is not None
-        assert steps[1].result is not None
+        assert steps[0].execution_result is not None
+        assert steps[1].execution_result is not None
 
     def test_context_merged(self):
         """子 Task 的 context 合并了原 Task context 和 step context。"""

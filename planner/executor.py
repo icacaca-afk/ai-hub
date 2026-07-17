@@ -69,7 +69,7 @@ class PlanExecutor:
                 context={**task.context, **step.context},
             )
             result = self.router.execute(sub_task)
-            step.result = result
+            step.execution_result = result
             step.status = "success" if result.is_success else "failed"
 
         return self._aggregate(plan, task)
@@ -98,18 +98,18 @@ class PlanExecutor:
         errors: list[str] = []
 
         for i, step in enumerate(plan.steps):
-            if step.result is None:
+            if step.execution_result is None:
                 continue
 
             # header 截断显示前 40 字符
             preview = step.content[:40] + ("..." if len(step.content) > 40 else "")
-            outputs.append(f"[Step {i}: {preview}]\n{step.result.output}")
+            outputs.append(f"[Step {i}: {preview}]\n{step.execution_result.output}")
 
-            if step.result.artifacts:
-                artifacts.extend(step.result.artifacts)
+            if step.execution_result.artifacts:
+                artifacts.extend(step.execution_result.artifacts)
 
-            if step.result.error:
-                errors.append(f"step-{i} ({step.result.provider}): {step.result.error}")
+            if step.execution_result.error:
+                errors.append(f"step-{i} ({step.execution_result.provider}): {step.execution_result.error}")
 
         combined_output = "\n\n".join(outputs)
         # 去重保序
@@ -132,9 +132,10 @@ class PlanExecutor:
             metadata={
                 "plan_id": plan.plan_id,
                 "task_id": original_task.task_id,
-                "step_count": total,
-                "success_count": success_count,
-                "failed_count": failed_count,
                 "planner": plan.metadata.get("planner", "unknown"),
+                "plan_status": plan.status,
+                "steps": total,
+                "success": success_count,
+                "failed": failed_count,
             },
         )

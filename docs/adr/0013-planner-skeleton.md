@@ -115,7 +115,7 @@ class Step:
     depends_on: list[str] = field(default_factory=list)  # 依赖的前置 step_id（V0.9.0 仅记录）
     context: dict = field(default_factory=dict)          # 子任务上下文
     status: str = "pending"                  # pending / running / success / failed / skipped
-    result: Optional[Result] = None          # 执行后填入
+    execution_result: Optional[Result] = None  # 执行后填入（为 V0.10+ 重试/execution_history 预留）
 
 @dataclass
 class Plan:
@@ -162,13 +162,14 @@ class PlanExecutor:
             sub_task = Task(content=step.content, capabilities=step.capabilities,
                             context={**task.context, **step.context})
             result = self.router.execute(sub_task)
-            step.result = result
+            step.execution_result = result
             step.status = "success" if result.is_success else "failed"
         return self._aggregate(plan, task)
 
     def _aggregate(self, plan: Plan, original_task: Task) -> Result:
         # 顺序拼接 outputs，合并 artifacts
         # status: 全 success → success；全 failed → failed；混合 → partial
+        # metadata: plan_status / steps / success / failed（对 explain-plan 直接友好）
         ...
 ```
 
@@ -193,6 +194,8 @@ class PlanExecutor:
 - **组合优于继承**：PlanExecutor 组合 Router，而非继承 ScoreRouter。一旦未来 Router 接口变化或出现 AgentBus，Planner 不受影响。
 - **Step 不继承 Task**：避免给冻结的 Task 加字段（如 status/result）。Step 是「可执行 + 可追踪」的扩展概念，与 Task 的「纯输入」职责不同。
 - **`depends_on` 先占位**：V0.9.0 记录依赖但不消费，让数据结构向前兼容 V0.10 的 DAG 执行器，避免后续迁移成本。
+- **`execution_result` 字段名预留扩展**：审核反馈采纳——不直接用 `result`，为 V0.10+ 重试场景下的 `execution_history` 留命名空间，避免字段名迁移成本。
+- **metadata 聚合统计**：审核反馈采纳——`plan_status` / `steps` / `success` / `failed` 直接写入 Result.metadata，explain-plan / Dashboard / Web UI 可直接消费，无需重新统计。
 - **CLI 延后**：骨架阶段先保 Python API 稳定，避免 subprocess 测试拖慢迭代（V0.8 explain-route 已踩过 subprocess 编码坑）。
 
 ## Consequences
