@@ -1,5 +1,6 @@
 # AI Hub — CLI inspect
 # V0.9.3: Plan 事后查看命令
+# V0.9.4: + "Trace: Available/No Trace" 关联（ADR-0017 D5 ChatGPT 强建议）
 #
 # 用法：
 #   ai-hub inspect <plan_id>           人类可读
@@ -9,7 +10,12 @@
 #
 # 数据来源：进程内 PlanStore（环形缓冲 N=10，V0.9.3）。
 # ⚠️ **Current Process Only**（ChatGPT 审核建议）：不持久化，进程退出后丢失。
-# 跨进程持久化由 V0.9.4+ Execution History 引入。
+# 跨进程持久化由 V0.9.5+ Execution History 引入。
+#
+# 与 trace 的职责区分（V0.9.4 ADR-0017 D5）：
+#   - inspect: 答「发生了什么？」 → PlanStore（业务）
+#   - trace:   答「怎么发生的？」 → TraceCollector（过程）
+# V0.9.4 inspect 增加 "Trace: Available/No Trace" 关联提示。
 #
 # 与 explain-route 的职责区分：
 #   - inspect: 查看 Plan 多步执行状态（任务级）
@@ -111,8 +117,9 @@ def _list_recent(json_output: bool) -> None:
 def _print_plan_human(plan) -> None:
     """人类可读 Plan 详情。"""
     from planner.plan import Plan
+    from cli.trace import get_trace_collector  # V0.9.4: check trace availability
 
-    print("AI Hub Inspect — v0.9.3 (Current Process Only)")
+    print("AI Hub Inspect — v0.9.4 (Current Process Only)")
     print()
     print(f"Plan: {plan.plan_id}")
     print(f"Task: {plan.task_id}")
@@ -126,6 +133,13 @@ def _print_plan_human(plan) -> None:
     print(f"Planner: {planner}")
     print(f"Router: {router}")
     print(f"Schema Version: {plan.metadata.get('schema_version', '?')}")
+
+    # V0.9.4 (ADR-0017 D5): Trace 关联（ChatGPT 强建议）
+    trace = get_trace_collector()
+    if trace.has(plan.plan_id):
+        print(f"Trace: Available (run `ai-hub trace {plan.plan_id}` for timeline)")
+    else:
+        print(f"Trace: No Trace")
     print()
 
     print("Steps:")
@@ -138,11 +152,15 @@ def _print_plan_human(plan) -> None:
         print(f"    Content: {content_preview}")
         print(f"    Capabilities: {step.capabilities}")
 
+        # V0.9.4: execution_metrics（如有）
+        if step.execution_metrics is not None:
+            m = step.execution_metrics
+            print(f"    Latency: {m.latency_ms}ms")
+
         # Execution result（如果有）
         if step.execution_result is not None:
             r = step.execution_result
             print(f"    Provider: {r.provider}")
-            print(f"    Duration: N/A")  # V0.9.4+ 引入 latency
             if r.error:
                 print(f"    Error: {r.error[:80]}")
         else:

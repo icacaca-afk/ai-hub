@@ -200,14 +200,14 @@ class TestCliPlanExecution:
         assert "[Step 1:" in captured.out
 
     def test_plan_version_in_output(self, monkeypatch, capsys):
-        """输出含 v0.9.3 版本标识。"""
+        """输出含 v0.9.4 版本标识。"""
         from cli import plan as plan_module
         _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello"])
         captured = capsys.readouterr()
 
-        assert "v0.9.3" in captured.out
+        assert "v0.9.4" in captured.out
 
     def test_plan_consumes_only_result_not_executor_internals(self, monkeypatch, capsys):
         """CLI 只消费 Result，不访问 Planner 内部（ADR-0014 架构约束）。

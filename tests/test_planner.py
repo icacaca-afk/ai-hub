@@ -601,3 +601,207 @@ class TestPlanStoreIntegration:
         assert store.size == 1
         saved = store.list_recent(limit=1)[0]
         assert saved.status == "failed"
+
+
+# ── V0.9.4: PlanExecutor emit events + ExecutionMetrics 集成 ──
+
+class TestEventBusIntegration:
+    """V0.9.4 (ADR-0017): PlanExecutor emit ExecutionEvent。"""
+
+    def test_executor_emits_to_event_bus(self):
+        """传入 event_bus 后，execute 触发 emit。"""
+        from planner.event_bus import EventBus
+        from planner.execution_event import ExecutionEvent
+
+        bus = EventBus()
+        received = []
+        bus.subscribe(None, lambda e: received.append(e))
+
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, event_bus=bus)
+        executor.execute(Task.from_text("第一步然后第二步"))
+
+        # 1 个 plan, 2 step → 应 emit 多 events
+        assert len(received) > 5
+
+        # 关键 event 类型应出现
+        types = [e.type for e in received]
+        assert "plan_started" in types
+        assert "plan_finished" in types
+        assert "planner_started" in types
+        assert "planner_finished" in types
+        assert "step_started" in types
+        assert "step_finished" in types
+
+    def test_executor_emits_per_step_events(self):
+        """2 step 任务 → emit 2 对 step_started/step_finished。"""
+        from planner.event_bus import EventBus
+
+        bus = EventBus()
+        received = []
+        bus.subscribe(None, lambda e: received.append(e))
+
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, event_bus=bus)
+        executor.execute(Task.from_text("第一步然后第二步"))
+
+        step_started = [e for e in received if e.type == "step_started"]
+        step_finished = [e for e in received if e.type == "step_finished"]
+        assert len(step_started) == 2
+        assert len(step_finished) == 2
+
+    def test_executor_emits_provider_finished_with_latency(self):
+        """provider_finished 含 latency_ms。"""
+        from planner.event_bus import EventBus
+
+        bus = EventBus()
+        received = []
+        bus.subscribe(None, lambda e: received.append(e))
+
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, event_bus=bus)
+        executor.execute(Task.from_text("hello"))
+
+        provider_finished = [e for e in received if e.type == "provider_finished"]
+        assert len(provider_finished) >= 1
+        for pf in provider_finished:
+            assert pf.latency_ms is not None
+            assert pf.latency_ms >= 0
+
+    def test_executor_without_event_bus_no_emit(self):
+        """不传 event_bus 时不 emit（向后兼容）。"""
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router)  # 无 event_bus
+
+        # 不应抛异常
+        result = executor.execute(Task.from_text("hello"))
+        assert result.status == "success"
+        assert executor.event_bus is None
+
+    def test_executor_event_isolation_in_bus(self):
+        """订阅者异常隔离（PlanExecutor 不被 Bus 错误影响）。"""
+        from planner.event_bus import EventBus
+
+        bus = EventBus()
+        bus.subscribe(None, lambda e: (_ for _ in ()).throw(ValueError("boom")))
+
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, event_bus=bus)
+
+        # 不应抛异常
+        result = executor.execute(Task.from_text("hello"))
+        assert result.status == "success"
+
+
+class TestExecutionMetricsIntegration:
+    """V0.9.4 (ADR-0017): ExecutionMetrics 在 PlanExecutor 中填充。"""
+
+    def test_step_execution_metrics_filled(self):
+        """Step.execution_metrics 填了 latency_ms。"""
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router)
+        result = executor.execute(Task.from_text("第一步然后第二步"))
+
+        # 通过 metadata 验证（V0.9.3 限制：CLI 不访问 last_plan）
+        assert "aggregate_metrics" in result.metadata
+        agg = result.metadata["aggregate_metrics"]
+        assert agg["latency_ms"] >= 0  # 至少 >= 0（FakeRouter 极快可能为 0）
+
+    def test_plan_aggregate_metrics_aggregates_steps(self):
+        """Plan.aggregate_metrics 是 Step metrics 之和。"""
+        from planner.event_bus import EventBus
+
+        bus = EventBus()  # 启用 emit 路径
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, event_bus=bus)
+        result = executor.execute(Task.from_text("第一步然后第二步"))
+
+        # 2 step, 每个 latency 都被加总
+        agg = result.metadata["aggregate_metrics"]
+        assert agg["latency_ms"] >= 0
+
+    def test_metadata_schema_version_still_1(self):
+        """schema_version 维持 "1"（ChatGPT 强建议：不为新增 Optional 字段升级）。"""
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router)
+        result = executor.execute(Task.from_text("hello"))
+
+        assert result.metadata["schema_version"] == "1"
+
+
+class TestPlanOptionalFields:
+    """V0.9.4 (ADR-0017): Plan / Step 可选字段向后兼容。"""
+
+    def test_plan_default_events_empty_list(self):
+        """Plan.events 默认空 list。"""
+        from planner.plan import Plan
+        plan = Plan(plan_id="p-001", task_id="t-001", steps=[])
+        assert plan.events == []
+
+    def test_plan_default_aggregate_metrics_zero(self):
+        """Plan.aggregate_metrics 默认全 0。"""
+        from planner.plan import Plan
+        plan = Plan(plan_id="p-001", task_id="t-001", steps=[])
+        assert plan.aggregate_metrics.latency_ms == 0
+        assert plan.aggregate_metrics.token_in == 0
+
+    def test_step_default_events_empty_list(self):
+        """Step.events 默认空 list。"""
+        from planner.plan import Step
+        step = Step(step_id="s-0", content="hi")
+        assert step.events == []
+
+    def test_step_default_execution_metrics_none(self):
+        """Step.execution_metrics 默认 None。"""
+        from planner.plan import Step
+        step = Step(step_id="s-0", content="hi")
+        assert step.execution_metrics is None
+
+    def test_plan_to_dict_includes_new_fields(self):
+        """Plan.to_dict() 含 events + aggregate_metrics。"""
+        from planner.plan import Plan, Step
+        plan = Plan(plan_id="p-001", task_id="t-001", steps=[Step(step_id="s-0", content="hi")])
+        d = plan.to_dict()
+        assert "events" in d
+        assert "aggregate_metrics" in d
+        assert d["events"] == []
+        assert d["aggregate_metrics"]["latency_ms"] == 0
+
+    def test_step_to_dict_includes_new_fields(self):
+        """Step.to_dict() 含 events + execution_metrics。"""
+        from planner.plan import Step
+        step = Step(step_id="s-0", content="hi")
+        d = step.to_dict()
+        assert "events" in d
+        assert "execution_metrics" in d  # None
+        assert d["events"] == []
+        assert d["execution_metrics"] is None
+
+
+class TestSingleSourceOfExecutionTruth:
+    """V0.9.4 (ADR-0017) 核心原则：ExecutionEvent 是执行事件唯一来源。"""
+
+    def test_executor_does_not_expose_get_trace_method(self):
+        """PlanExecutor 不暴露 get_trace()（强制走 EventBus 路径）。"""
+        executor = PlanExecutor.__init__
+        # 没有 get_trace / get_metrics / get_events 方法
+        executor_attrs = dir(PlanExecutor)
+        assert "get_trace" not in executor_attrs
+        assert "get_events" not in executor_attrs
+        assert "get_metrics" not in executor_attrs

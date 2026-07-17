@@ -2,6 +2,7 @@
 # V0.9.1: Planner CLI 入口
 # V0.9.2: 新增 --llm 标志
 # V0.9.3: --json 真正实现（结构化输出）+ PlanStore 集成
+# V0.9.4: EventBus + InMemoryTraceCollector 集成（ADR-0017）
 #
 # 用法：
 #   ai-hub plan "<复合任务描述>"                    人类可读输出
@@ -13,6 +14,9 @@
 #
 # V0.9.3 新增：执行完的 Plan 自动存入进程内 PlanStore（环形缓冲 N=10），
 # 可用 `ai-hub inspect <plan_id>` 查看详情。
+#
+# V0.9.4 新增：注入 EventBus + InMemoryTraceCollector，
+# 执行时 emit 事件，可用 `ai-hub trace <plan_id>` 查看 Timeline。
 #
 # API Stability: Experimental
 
@@ -30,9 +34,11 @@ from core.quota import QuotaManager
 from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from planner.executor import PlanExecutor
+from planner.event_bus import EventBus
 from planner.plan_store import PlanStore, DEFAULT_STORE_SIZE
 from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
+from planner.trace_collector import InMemoryTraceCollector
 
 
 # V0.9.3: 进程内 PlanStore（环形缓冲 N=10），供 cmd_inspect 查询
@@ -41,9 +47,27 @@ from planner.llm_planner import LLMPlanner
 _PLAN_STORE = PlanStore(max_size=DEFAULT_STORE_SIZE)
 
 
+# V0.9.4: 进程内 EventBus + InMemoryTraceCollector（共享单例）
+# 设计：cli/plan.py 启动时构造 EventBus + TraceCollector + 自动 attach
+# cmd_trace / cmd_inspect 共享同一 collector 实例
+_EVENT_BUS = EventBus()
+_TRACE_COLLECTOR = InMemoryTraceCollector()
+_TRACE_COLLECTOR.attach(_EVENT_BUS)
+
+
 def get_plan_store() -> PlanStore:
     """暴露 PlanStore 给 cli/inspect.py 使用（V0.9.3）。"""
     return _PLAN_STORE
+
+
+def get_event_bus() -> EventBus:
+    """暴露 EventBus（V0.9.4）。"""
+    return _EVENT_BUS
+
+
+# V0.9.4: 把 TraceCollector 注入 cli/trace.py 单例
+from cli import trace as _trace_module  # noqa: E402 — 必须 _PLAN_STORE 之后
+_trace_module.set_trace_collector(_TRACE_COLLECTOR)
 
 
 def _build_registry():
@@ -112,7 +136,13 @@ def cmd_plan(args: list[str]) -> None:
         planner = RuleBasedPlanner()
 
     # V0.9.3: 注入 PlanStore（执行完自动 save，inspect 可查）
-    executor = PlanExecutor(router=router, planner=planner, plan_store=_PLAN_STORE)
+    # V0.9.4: 注入 EventBus（执行时 emit 事件，trace 可查）
+    executor = PlanExecutor(
+        router=router,
+        planner=planner,
+        plan_store=_PLAN_STORE,
+        event_bus=_EVENT_BUS,
+    )
 
     task = Task.from_text(text)
 
@@ -134,10 +164,10 @@ def cmd_plan(args: list[str]) -> None:
 
 
 def _print_json_output(task: Task, result) -> None:
-    """V0.9.3: 输出结构化 JSON（ADR-0016 schema）。"""
+    """V0.9.4: 输出结构化 JSON（ADR-0016 + ADR-0017 schema）。"""
     # 安全序列化：Result.metadata 是 dict，Result.to_dict() 处理嵌套
     payload = {
-        "version": "0.9.3",
+        "version": "0.9.4",
         "task": {
             "text": task.content,
             "task_id": task.task_id,
@@ -156,8 +186,8 @@ def _print_json_output(task: Task, result) -> None:
 
 
 def _print_human_output(text: str, result) -> None:
-    """V0.9.3 人类可读输出（保持 V0.9.1 格式，版本号升级）。"""
-    print("AI Hub Plan — v0.9.3")
+    """V0.9.4 人类可读输出（V0.9.1 格式 + V0.9.4 schema_version/aggregate_metrics）。"""
+    print("AI Hub Plan — v0.9.4")
     print()
     print("Task:")
     print(f"  {text}")

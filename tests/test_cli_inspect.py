@@ -110,10 +110,13 @@ class TestCmdInspectBasic:
         out = capsys.readouterr().out
 
         assert "AI Hub Inspect" in out
+        assert "v0.9.4" in out
         assert "p-001" in out
         assert "Planner" in out
         assert "Schema Version" in out
         assert "Steps" in out
+        # V0.9.4: Trace 关联（默认 No Trace）
+        assert "Trace: No Trace" in out
 
     def test_inspect_existing_plan_json(self, _isolated_plan_store, capsys):
         """已知 plan_id --json → 合法 JSON。"""
