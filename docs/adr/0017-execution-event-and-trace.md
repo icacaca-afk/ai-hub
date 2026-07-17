@@ -1,12 +1,14 @@
 # ADR-0017: V0.9.4 — Execution Event + Metrics + Trace
 
-- **状态**: Accepted（ChatGPT 外部审核 10.0/10 APPROVED）
+- **状态**: Accepted（ADR 审核 10.0/10 + 代码审核 10.0/10 APPROVED）
 - **日期**: 2026-07-17
 - **里程碑**: V0.9.4
 - **关联**: ADR-0008（Core Freeze）、ADR-0013（Planner 骨架）、ADR-0014（CLI + metadata 分层）、ADR-0015（LLM Planner + 语义）、ADR-0016（CLI --json + inspect + schema_version）
 - **API Stability**: Experimental
-- **ChatGPT 审核**: 10.0/10 APPROVED（2026-07-17）
+- **ChatGPT ADR 审核**: 10.0/10 APPROVED（2026-07-17）
+- **ChatGPT 代码审核**: 10.0/10 APPROVED（2026-07-17）
 - **前序审核**: [V0.9.3 ChatGPT Review](../reviews/V0.9.3-chatgpt-review.md) — 9.98/10 APPROVED
+- **代码审核**: [V0.9.4 代码 ChatGPT Review](../reviews/V0.9.4-code-chatgpt-review.md) — 10.0/10 APPROVED
 
 ## ⚠️ 核心设计原则（ChatGPT 审核强建议加入）
 
@@ -33,6 +35,22 @@
 - `PlanExecutor` 内部不再提供 get_trace() / get_metrics() 这类方法
 - 所有可观察数据通过 EventBus 流出，由 Consumer 派生
 - PlanExecutor.execute() 只关心 emit，不关心 consume
+
+### 补充原则（V0.9.4 代码审核后加入）
+
+ChatGPT V0.9.4 代码审核（10.0/10 APPROVED）补充两条约定：
+
+> **1. Event handlers should be lightweight and non-blocking.**
+>
+> Event handler 必须轻量且非阻塞。这为 V0.9.5+ SQLite Consumer 铺路：
+> 持久化 consumer 不能直接在 handler 里同步 INSERT，而应写入后台队列。
+> V0.9.4 同步分发维持，但 handler 实现需遵守此约定。
+
+> **2. ExecutionEvent should be treated as immutable after emission.**
+>
+> ExecutionEvent 在 emit() 后应视为不可变。Consumer 不能修改 `event.data`，
+> 否则多个 Consumer 会互相影响。V0.9.4 作为约定（不强制），
+> 这是事件驱动架构里一个很重要的约束。未来可考虑 frozen dataclass 强制。
 
 ## 背景
 
@@ -464,8 +482,15 @@ Timeline (8 events):
 
 ## 后续路线
 
-- **V0.9.5**：ExecutionStore（SQLite 单文件持久化，单进程） + 异步 EventBus
-- **V0.9.6**：token / cost 自动采集（与 Provider 配合）
+- **V0.9.5**：SQLiteExecutionStore（方案 A — EventBus Consumer，不继承 TraceCollector）
+  - ChatGPT V0.9.4 代码审核明确建议方案 A：
+    ```
+    ExecutionEvent → TraceCollector → Timeline
+    ExecutionEvent → SQLiteExecutionStore → DB
+    ```
+  - 两者都是独立 EventBus Consumer。SQLite 是 Storage，不是 Trace。
+  - 单进程，不做跨进程同步。
+- **V0.9.6**：token / cost 自动采集（Provider 返回 server_metrics → Runtime 转 ExecutionMetrics，Provider 不接触 EventBus）
 - **V0.10**：Workflow Runtime（按 ChatGPT 优先级）
   1. **Dependency**（依赖图 — DAG 是一种表示）
   2. **Conditional**（条件分支）
@@ -478,13 +503,23 @@ Timeline (8 events):
 
 ## 审核结论
 
+### ADR 审核
+
 > ChatGPT：10.0/10 APPROVED（Proposed → Accepted）
 >
 > 原文：*「我给 10.0/10（作为 ADR，而不是代码实现）。原因很简单：它没有急着做 ExecutionStore，而是先把 Execution 的模型定义出来。这是 V0.9.x 最重要的一次架构决策。」*
 >
 > 完整审核：[V0.9.4 ADR ChatGPT Review](../reviews/V0.9.4-adr-chatgpt-review.md)
 
-**采纳的 8 项建议**：
+### 代码审核
+
+> ChatGPT：10.0/10 APPROVED
+>
+> 原文：*「V0.9.4 最大的成功不是 Trace，而是：PlanExecutor 已经不是可观察性的拥有者（Owner），而只是 ExecutionEvent 的生产者（Producer）。这是 Runtime 设计里面一个非常重要的分水岭。」*
+>
+> 完整审核：[V0.9.4 代码 ChatGPT Review](../reviews/V0.9.4-code-chatgpt-review.md)
+
+**ADR 审核采纳的 8 项建议**：
 1. ✅ ExecutionEvent.event_id 字段（UUID 唯一键）
 2. ✅ EventBus.subscribe(event_type, callback) 接口预留（V0.9.4 内部暂不过滤）
 3. ✅ ExecutionMetrics 只含可测量字段（latency / token / cost / retry）
@@ -494,10 +529,19 @@ Timeline (8 events):
 7. ✅ schema_version 维持 "1"（Postel's Law — 不为新增 Optional 字段升级）
 8. ✅ Provider latency 显式记录 + Step/Plan latency 派生
 
+**代码审核补充的 2 条设计约定**：
+9. ✅ Event handlers should be lightweight and non-blocking（为 V0.9.5+ SQLite 后台队列铺路）
+10. ✅ ExecutionEvent should be treated as immutable after emission（事件驱动架构核心约束）
+
+**代码审核明确的 V0.9.5 方向**：
+- 方案 A：SQLiteExecutionStore 作为独立 EventBus Consumer（不继承 TraceCollector）
+- Provider 不 emit Event（Provider 返回 server_metrics → Runtime 转 ExecutionMetrics）
+
 **未采纳的延后**：
 - ⏸ SQLite 跨进程同步（V0.9.5 仍单进程；V0.11+ 再做）
 - ⏸ V0.10 Workflow Runtime 完整实现（V0.9.4 后下一里程碑）
+- ⏸ Subscription Handle（token 模式）— V1.0 再升级（V0.9.4 id(handler) 维持）
 
 ---
 
-> V0.9.4 已 Accepted，可进入实施阶段。
+> V0.9.4 已 Accepted（ADR + 代码双 10.0/10），V0.9.5 进入 ADR-0018 阶段。
