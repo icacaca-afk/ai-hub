@@ -24,6 +24,7 @@ packages = [
     "core",
     "router",
     "cli",
+    "planner",
     "providers",
     "providers.demo",
     "providers.gemini",

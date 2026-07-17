@@ -6,11 +6,12 @@
 #
 # ADR-0013: V0.9.0 只做顺序执行 + 简单聚合。DAG/并行留 V0.10+。
 #
-# 聚合规则（V0.9.0 极简）：
+# 聚合规则（V0.9.1 分层 metadata，ADR-0014）：
 #   - 全 success → success
 #   - 全 failed → failed
 #   - 混合 → partial
 #   - outputs 顺序拼接（带 step header），artifacts 合并去重
+#   - metadata 分层：顶层 plan_id/task_id；plan.{status,steps,success,failed}；runtime.{planner,router}
 #
 # API Stability: Experimental
 
@@ -130,12 +131,20 @@ class PlanExecutor:
             error="; ".join(errors) if errors else None,
             artifacts=combined_artifacts,
             metadata={
+                # 顶层冻结：仅 plan_id / task_id，不允许新增顶层字段（ADR-0014）
                 "plan_id": plan.plan_id,
                 "task_id": original_task.task_id,
-                "planner": plan.metadata.get("planner", "unknown"),
-                "plan_status": plan.status,
-                "steps": total,
-                "success": success_count,
-                "failed": failed_count,
+                # plan 子键：计划统计（explain-plan / Dashboard 直接消费）
+                "plan": {
+                    "status": plan.status,
+                    "steps": total,
+                    "success": success_count,
+                    "failed": failed_count,
+                },
+                # runtime 子键：执行态信息（V0.10+ 扩展 latency/token/cost/retry）
+                "runtime": {
+                    "planner": type(self.planner).__name__,
+                    "router": type(self.router).__name__,
+                },
             },
         )

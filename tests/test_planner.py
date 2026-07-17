@@ -262,10 +262,11 @@ class TestPlanExecutor:
         assert result.is_success
         assert result.provider == "planner"
         assert "done" in result.output
-        assert result.metadata["steps"] == 2
-        assert result.metadata["success"] == 2
-        assert result.metadata["failed"] == 0
-        assert result.metadata["plan_status"] == "success"
+        assert result.metadata["plan"]["steps"] == 2
+        assert result.metadata["plan"]["success"] == 2
+        assert result.metadata["plan"]["failed"] == 0
+        assert result.metadata["plan"]["status"] == "success"
+        assert result.metadata["runtime"]["planner"] == "RuleBasedPlanner"
 
     def test_all_failed(self):
         """全 failed → Plan status=failed，Result status=failed。"""
@@ -279,9 +280,9 @@ class TestPlanExecutor:
 
         assert result.status == "failed"
         assert not result.is_success
-        assert result.metadata["failed"] == 2
-        assert result.metadata["success"] == 0
-        assert result.metadata["plan_status"] == "failed"
+        assert result.metadata["plan"]["failed"] == 2
+        assert result.metadata["plan"]["success"] == 0
+        assert result.metadata["plan"]["status"] == "failed"
         assert result.error is not None
 
     def test_mixed_partial(self):
@@ -296,9 +297,9 @@ class TestPlanExecutor:
         result = executor.execute(task)
 
         assert result.status == "partial"
-        assert result.metadata["success"] == 1
-        assert result.metadata["failed"] == 1
-        assert result.metadata["plan_status"] == "partial"
+        assert result.metadata["plan"]["success"] == 1
+        assert result.metadata["plan"]["failed"] == 1
+        assert result.metadata["plan"]["status"] == "partial"
 
     def test_single_step_equivalent_to_router(self):
         """单步 Plan 等价于直接走 Router（退化场景）。"""
@@ -311,7 +312,7 @@ class TestPlanExecutor:
         result = executor.execute(task)
 
         assert result.status == "success"
-        assert result.metadata["steps"] == 1
+        assert result.metadata["plan"]["steps"] == 1
         assert "hello back" in result.output
         assert len(router.calls) == 1
 
@@ -380,7 +381,9 @@ class TestPlanExecutor:
         result = executor.execute(task)
 
         # 自定义 planner 不切分，只有 1 步
-        assert result.metadata["steps"] == 1
+        assert result.metadata["plan"]["steps"] == 1
+        # 自定义 planner 类名应反映在 runtime.planner
+        assert result.metadata["runtime"]["planner"] == "SingleStepPlanner"
         assert executor.last_plan.plan_id == "custom"
 
     def test_step_status_updated(self):

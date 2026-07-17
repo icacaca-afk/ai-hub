@@ -23,6 +23,7 @@ from core.history import HistoryStore
 from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from cli.explain_route import cmd_explain_route
+from cli.plan import cmd_plan
 
 
 def _build_registry() -> CapabilityRegistry:
@@ -681,7 +682,8 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("AI Hub — One Task. Any AI. Any Runtime.\n")
         print("Usage:")
-        print('  ai-hub ask "<task>"    Execute a task')
+        print('  ai-hub ask "<task>"    Execute a task (single step)')
+        print('  ai-hub plan "<task>"   Decompose + execute multi-step task (V0.9.1)')
         print("  ai-hub history [N]      Show recent N tasks (default 10)")
         print("  ai-hub status           Show provider status")
         print("  ai-hub doctor           Diagnose provider issues")
@@ -697,6 +699,7 @@ def main() -> None:
 
     commands = {
         "ask": cmd_ask,
+        "plan": cmd_plan,
         "history": cmd_history,
         "status": cmd_status,
         "quota": cmd_quota,
