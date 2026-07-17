@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 class PricingProvider(ABC):
     """Pricing 来源接口。默认 StaticPricing 用静态 dict。
 
-    实现方只需实现 compute()，返回 USD 金额（float）。
+    实现方只需实现 compute() + is_known()。
 
     API Stability: Experimental
     """
@@ -25,14 +25,21 @@ class PricingProvider(ABC):
     def compute(self, model: str, token_in: int, token_out: int) -> float:
         """根据 model + 输入/输出 token 数估算 USD 成本。
 
+        未知 model 返回 0.0（不猜测价格）。
+
         Args:
             model: 模型名（如 "gpt-4o"）
             token_in: 输入 token 数
             token_out: 输出 token 数
 
         Returns:
-            USD 成本（float，保留 6 位小数）
+            USD 成本（float，保留 6 位小数）；未知 model 返回 0.0
         """
+        ...
+
+    @abstractmethod
+    def is_known(self, model: str) -> bool:
+        """该 model 是否有价格信息（用于 estimated 标记）。"""
         ...
 
 
@@ -43,24 +50,31 @@ _PRICING_TABLE: dict[str, tuple[float, float]] = {
     "gpt-4o":          (0.0025, 0.01),
     "gpt-4o-mini":     (0.00015, 0.0006),
     "gpt-3.5-turbo":   (0.0005, 0.0015),
-    "_default":        (0.01, 0.03),
 }
 
 
 class StaticPricing(PricingProvider):
     """静态 dict 计价实现。
 
-    未知 model 走 _default 价格（保守估算）。
+    未知 model 返回 0.0（ChatGPT Q5 建议：不猜测价格）。
+    已知 model 按 token 数估算 USD 成本。
 
     API Stability: Experimental
     """
 
     def compute(self, model: str, token_in: int, token_out: int) -> float:
-        prices = _PRICING_TABLE.get(model, _PRICING_TABLE["_default"])
+        prices = _PRICING_TABLE.get(model)
+        if prices is None:
+            # 未知 model：不估算，返回 0（避免误导用户）
+            return 0.0
         return round(
             token_in / 1000 * prices[0] + token_out / 1000 * prices[1],
             6,
         )
+
+    def is_known(self, model: str) -> bool:
+        """该 model 是否在价格表中。"""
+        return model in _PRICING_TABLE
 
 
 _default_pricing = StaticPricing()

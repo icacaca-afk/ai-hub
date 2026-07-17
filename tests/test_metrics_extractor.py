@@ -123,7 +123,7 @@ class TestExtractOpenAI:
         assert m["model"] == "gpt-4o"
 
     def test_extract_unknown_model(self):
-        """未知 model 走 _default 价格。"""
+        """未知 model 返回 cost_usd=0.0（ChatGPT Q5 建议：不猜测价格）。"""
         raw = json.dumps({
             "model": "claude-opus-4",
             "usage": {
@@ -135,10 +135,11 @@ class TestExtractOpenAI:
         br = BridgeResult(success=True, output="ok", raw=raw)
         m = MetricsExtractor.extract("openai_api", _FakeBridge(), br)
 
-        # _default: 0.01/1K in + 0.03/1K out
-        # 1000/1000 * 0.01 + 1000/1000 * 0.03 = 0.04
-        assert m["cost_usd"] == pytest.approx(0.04, abs=1e-9)
+        # 未知 model：cost_usd = 0.0（不估算），但 token_in/out 仍正常提取
+        assert m["cost_usd"] == 0.0
         assert m["model"] == "claude-opus-4"
+        assert m["token_in"] == 1000
+        assert m["token_out"] == 1000
 
     def test_extract_returns_dict_with_expected_keys(self):
         """返回的 dict 含 5 个固定 key。"""

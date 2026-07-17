@@ -209,7 +209,8 @@ def _describe_event(event) -> str:
             token_in = sm.get("token_in", 0)
             token_out = sm.get("token_out", 0)
             cost = sm.get("cost_usd", 0.0)
-            parts.append(f"  in={token_in} out={token_out} ≈${cost:.4f}")
+            # ChatGPT Q6 建议：用 "est." 替代 "≈"（Windows 终端兼容性）
+            parts.append(f"  in={token_in} out={token_out} est. ${cost:.4f}")
         return "".join(parts)
     elif type_ == "step_finished":
         idx = (event.step_id or "").replace("step-", "")

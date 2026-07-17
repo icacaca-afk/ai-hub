@@ -56,9 +56,10 @@ class MetricsExtractor:
         try:
             return handler(bridge, br)
         except Exception as exc:
+            # ChatGPT Q4 建议：log 带 Exception Type，便于排查
             _log.warning(
-                "MetricsExtractor extract failed provider=%s: %s",
-                provider_name, exc,
+                "MetricsExtractor extract failed provider=%s (%s): %s",
+                provider_name, type(exc).__name__, exc,
             )
             return {}
 

@@ -3,7 +3,8 @@
 #
 # 覆盖：
 # - 已知 model 的 cost 计算（gpt-4 / gpt-4o / gpt-4o-mini / gpt-3.5-turbo / gpt-4-turbo）
-# - 未知 model 走 _default 价格
+# - 未知 model 返回 0.0（ChatGPT Q5 建议：不猜测价格）
+# - is_known() 已知/未知 model 判定
 # - token=0 时 cost=0.0
 # - compute 返回 float
 # - get_default_pricing 返回 StaticPricing 实例
@@ -63,22 +64,21 @@ class TestStaticPricing:
         # 0.0005 + 0.0015 = 0.002
         assert cost == pytest.approx(0.002, abs=1e-6)
 
-    def test_unknown_model_uses_default(self):
-        """未知 model 走 _default 价格 (0.01, 0.03)。"""
+    def test_unknown_model_returns_zero(self):
+        """未知 model 返回 0.0（ChatGPT Q5 建议：不猜测价格，避免误导用户）。"""
         p = StaticPricing()
         cost = p.compute("some-future-model", token_in=1000, token_out=1000)
-        # 0.01 + 0.03 = 0.04
-        assert cost == pytest.approx(0.04, abs=1e-6)
+        assert cost == 0.0
 
-    def test_unknown_model_same_as_default(self):
-        """未知 model 与显式 _default 价格一致。"""
+    def test_unknown_model_returns_zero_even_with_tokens(self):
+        """未知 model + 非零 token 也返回 0.0（不估算）。"""
         p = StaticPricing()
         unknown = p.compute("non-existent-xyz", token_in=1500, token_out=700)
-        default_prices = _PRICING_TABLE["_default"]
-        expected = round(
-            1500 / 1000 * default_prices[0] + 700 / 1000 * default_prices[1], 6
-        )
-        assert unknown == pytest.approx(expected, abs=1e-9)
+        assert unknown == 0.0
+
+    def test_no_default_entry_in_pricing_table(self):
+        """_PRICING_TABLE 不应包含 _default 条目（ChatGPT Q5：移除 _default）。"""
+        assert "_default" not in _PRICING_TABLE
 
     def test_zero_tokens_cost_zero(self):
         """token_in=token_out=0 时 cost=0.0。"""
@@ -122,6 +122,29 @@ class TestStaticPricing:
         assert cost == round(1 / 1000 * 0.00015 + 1 / 1000 * 0.0006, 6)
 
 
+class TestIsKnown:
+    """is_known() 方法测试（ChatGPT Q5 建议新增）。"""
+
+    def test_known_model_is_known_true(self):
+        """已知 model 返回 True。"""
+        p = StaticPricing()
+        for model in _PRICING_TABLE.keys():
+            assert p.is_known(model) is True, f"{model} should be known"
+
+    def test_unknown_model_is_known_false(self):
+        """未知 model 返回 False。"""
+        p = StaticPricing()
+        assert p.is_known("some-future-model") is False
+        assert p.is_known("non-existent-xyz") is False
+        assert p.is_known("") is False
+
+    def test_is_known_returns_bool(self):
+        """is_known() 始终返回 bool。"""
+        p = StaticPricing()
+        assert isinstance(p.is_known("gpt-4"), bool)
+        assert isinstance(p.is_known("unknown"), bool)
+
+
 class TestPricingProviderInterface:
     """PricingProvider 接口测试。"""
 
@@ -130,8 +153,8 @@ class TestPricingProviderInterface:
         with pytest.raises(TypeError):
             PricingProvider()  # type: ignore[abstract]
 
-    def test_subclass_must_implement_compute(self):
-        """子类必须实现 compute()，否则 TypeError。"""
+    def test_subclass_must_implement_all_abstract_methods(self):
+        """子类必须实现 compute() + is_known()，否则 TypeError。"""
 
         class IncompletePricing(PricingProvider):
             pass
@@ -139,15 +162,29 @@ class TestPricingProviderInterface:
         with pytest.raises(TypeError):
             IncompletePricing()  # type: ignore[abstract]
 
+    def test_subclass_missing_is_known_fails(self):
+        """子类只实现 compute() 不实现 is_known()，仍不能实例化。"""
+
+        class MissingIsKnown(PricingProvider):
+            def compute(self, model: str, token_in: int, token_out: int) -> float:
+                return 0.42
+
+        with pytest.raises(TypeError):
+            MissingIsKnown()  # type: ignore[abstract]
+
     def test_custom_subclass_works(self):
-        """自定义子类实现 compute() 可正常使用。"""
+        """自定义子类实现 compute() + is_known() 可正常使用。"""
 
         class FixedPricing(PricingProvider):
             def compute(self, model: str, token_in: int, token_out: int) -> float:
                 return 0.42
 
+            def is_known(self, model: str) -> bool:
+                return True
+
         p = FixedPricing()
         assert p.compute("any", 100, 100) == 0.42
+        assert p.is_known("any") is True
 
 
 class TestGetDefaultPricing:
@@ -175,3 +212,9 @@ class TestGetDefaultPricing:
         cost = p.compute("gpt-4", token_in=1000, token_out=1000)
         # 0.03 + 0.06 = 0.09
         assert cost == pytest.approx(0.09, abs=1e-6)
+
+    def test_default_pricing_unknown_model_returns_zero(self):
+        """默认 pricing 实例对未知 model 返回 0.0。"""
+        p = get_default_pricing()
+        cost = p.compute("some-future-model", token_in=1000, token_out=1000)
+        assert cost == 0.0
