@@ -3,11 +3,13 @@
 #
 # ADR-0013: V0.9.0 骨架，保持 Core Freeze（ADR-0008）。
 # ADR-0017: V0.9.4 Execution Event + Metrics + Trace
+# ADR-0020: V0.9.7 Execution Analytics（query_events + Statistics）
 #
 # 用法：
 #     from planner import PlanExecutor, RuleBasedPlanner, EventBus
 #     from planner import ExecutionEvent, ExecutionMetrics
 #     from planner import InMemoryTraceCollector
+#     from planner import ExecutionStatistics, StatisticsCollector
 #
 #     bus = EventBus()
 #     trace = InMemoryTraceCollector()
@@ -28,6 +30,11 @@ from planner.execution_metrics import ExecutionMetrics
 from planner.event_bus import EventBus
 from planner.trace_collector import InMemoryTraceCollector
 from planner.sqlite_execution_store import SQLiteExecutionStore
+from planner.statistics import (
+    ExecutionStatistics,
+    ProviderStatistics,
+    StatisticsCollector,
+)
 from planner.executor import PlanExecutor
 
 __all__ = [
@@ -43,5 +50,8 @@ __all__ = [
     "EventBus",
     "InMemoryTraceCollector",
     "SQLiteExecutionStore",
+    "ExecutionStatistics",
+    "ProviderStatistics",
+    "StatisticsCollector",
     "PlanExecutor",
 ]

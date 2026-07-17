@@ -1,5 +1,6 @@
 # AI Hub — CLI exec-history
 # V0.9.5: Plan Execution History (SQLite 持久化，跨进程)
+# V0.9.7: 重构为 query_events()（ADR-0020 决策 6）
 #
 # 用法：
 #   ai-hub exec-history                       列出最近 N 个 plan execution（默认 20）
@@ -8,10 +9,15 @@
 #   ai-hub exec-history --limit N             限制条数
 #   ai-hub exec-history --plan <id> --json    timeline JSON
 #
-# 数据来源：SQLiteExecutionStore（持久化，跨进程，ADR-0018）。
+# 数据来源：SQLiteExecutionStore.query_events()（V0.9.7 统一查询接口，ADR-0020）。
 # 与 trace 的职责区分：
 #   - trace:   答「当前进程怎么发生的？」 → InMemoryTraceCollector（进程内，退出丢失）
 #   - history: 答「历史发生过什么？」     → SQLiteExecutionStore（持久化，跨进程）
+#
+# V0.9.7 重构（ADR-0020 决策 6）：
+#   - _show_timeline 改用 store.query_events(plan_id=...) 替代 store.get_events(...)
+#   - _list_executions 仍用 store.list_plans()（list_plans 内部已基于 query_events 派生）
+#   - 对外行为不变（向后兼容）
 #
 # 命令名用 ``exec-history``（``history`` 已被 cli/main.py 的 cmd_history 占用）。
 #
@@ -96,7 +102,7 @@ def _list_executions(json_output: bool, limit: int) -> None:
 
     if json_output:
         payload = {
-            "version": "0.9.6",
+            "version": "0.9.7",
             "source": "sqlite",
             "db_path": str(store.db_path),
             "count": len(executions),
@@ -106,8 +112,9 @@ def _list_executions(json_output: bool, limit: int) -> None:
         return
 
     # 人类可读
-    print("AI Hub Execution History — v0.9.6 (SQLite)")
+    print("AI Hub Execution History — v0.9.7 (SQLite)")
     print()
+
     print(f"Recent Executions: {len(executions)}")
     print()
     if not executions:
@@ -133,11 +140,11 @@ def _show_timeline(plan_id: str, json_output: bool) -> None:
         print(f"Hint: try `ai-hub exec-history` to see available executions", file=sys.stderr)
         sys.exit(1)
 
-    events = store.get_events(plan_id)
+    events = store.query_events(plan_id=plan_id)
 
     if json_output:
         payload = {
-            "version": "0.9.6",
+            "version": "0.9.7",
             "source": "sqlite",
             "db_path": str(store.db_path),
             "plan_id": plan_id,
@@ -152,7 +159,7 @@ def _show_timeline(plan_id: str, json_output: bool) -> None:
 
 def _print_timeline_human(plan_id: str, events: list) -> None:
     """人类可读 Timeline 视图（参考 cli/trace.py 格式）。"""
-    print("AI Hub Execution History — v0.9.6 (SQLite)")
+    print("AI Hub Execution History — v0.9.7 (SQLite)")
     print()
     print(f"Plan: {plan_id}")
     print(f"Events: {len(events)}")

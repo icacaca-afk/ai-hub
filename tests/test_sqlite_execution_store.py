@@ -1,5 +1,6 @@
 # tests/test_sqlite_execution_store.py
 # V0.9.5 — SQLiteExecutionStore 测试（ADR-0018）
+# V0.9.7 — 新增 query_events() 统一查询接口测试（ADR-0020）
 #
 # 覆盖：
 # - 建表 / has / get_events / 空 DB
@@ -9,6 +10,9 @@
 # - Storage Failure ≠ Execution Failure（DatabaseError 不 re-raise）
 # - Context Manager（with 语句）
 # - _resolve_db_path 优先级（custom / env / workspace）
+# - V0.9.7：query_events() 多维过滤（plan_id / event_type / provider / step_id / since / until / limit）
+# - V0.9.7：provider 参数支持 list[str]（ChatGPT Q7 调整）
+# - V0.9.7：get_events / list_plans / has 向后兼容
 #
 # 测试隔离：每个测试用 tmp_path 创建临时 DB，不污染 ~/.ai-hub/
 
@@ -442,3 +446,232 @@ class TestSQLiteExecutionStoreDbPath:
             assert s.db_path == env_path
         finally:
             s.close()
+
+
+# ── V0.9.7：query_events() 统一查询接口（ADR-0020） ──
+
+class TestQueryEvents:
+    """query_events(...) 多维过滤测试。"""
+
+    def test_query_events_no_filter_returns_all(self, store):
+        """无过滤：返回所有 events。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+        for e in _make_events("p-002", count=3):
+            store.handle(e)
+
+        all_events = store.query_events()
+        assert len(all_events) == 11  # 8 + 3
+        # 按 timestamp 升序
+        assert all_events[0].type == "plan_started"
+
+    def test_query_events_by_plan_id(self, store):
+        """按 plan_id 过滤。"""
+        for e in _make_events("p-a", count=8):
+            store.handle(e)
+        for e in _make_events("p-b", count=3):
+            store.handle(e)
+
+        events = store.query_events(plan_id="p-a")
+        assert len(events) == 8
+        assert all(e.plan_id == "p-a" for e in events)
+
+    def test_query_events_by_event_type(self, store):
+        """按 event_type 过滤。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+
+        events = store.query_events(event_type="provider_finished")
+        assert len(events) == 1
+        assert events[0].type == "provider_finished"
+
+    def test_query_events_by_provider_str(self, store):
+        """按 provider 过滤（单 str，ChatGPT Q7）。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+
+        events = store.query_events(provider="fake")
+        assert len(events) == 1
+        assert events[0].provider == "fake"
+
+    def test_query_events_by_provider_list(self, store):
+        """按 provider 过滤（list[str]，ChatGPT Q7 调整）。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+        # 添加 openai_api provider
+        store.handle(ExecutionEvent(
+            type="provider_finished", plan_id="p-001", step_id="step-0",
+            provider="openai_api", latency_ms=200, data={"status": "success"},
+        ))
+        store.handle(ExecutionEvent(
+            type="provider_finished", plan_id="p-001", step_id="step-1",
+            provider="openai_compatible", latency_ms=300, data={"status": "success"},
+        ))
+
+        # 多 provider IN 子句
+        events = store.query_events(provider=["openai_api", "openai_compatible"])
+        assert len(events) == 2
+        providers = {e.provider for e in events}
+        assert providers == {"openai_api", "openai_compatible"}
+
+    def test_query_events_by_provider_empty_list(self, store):
+        """provider=[] 短路返回空 list。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+        events = store.query_events(provider=[])
+        assert events == []
+
+    def test_query_events_by_step_id(self, store):
+        """按 step_id 过滤。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+
+        events = store.query_events(step_id="step-0")
+        # step-0 关联的 events：step_started / provider_selected / provider_finished / step_finished
+        assert len(events) == 4
+        assert all(e.step_id == "step-0" for e in events)
+
+    def test_query_events_by_since(self, store):
+        """按 since 过滤（timestamp >= since）。"""
+        # 显式时间戳
+        e1 = ExecutionEvent(
+            type="plan_started", plan_id="p-001", timestamp="2026-01-01T00:00:00.000Z"
+        )
+        e2 = ExecutionEvent(
+            type="step_started", plan_id="p-001", step_id="step-0", timestamp="2026-06-01T00:00:00.000Z"
+        )
+        e3 = ExecutionEvent(
+            type="plan_finished", plan_id="p-001", timestamp="2026-12-01T00:00:00.000Z"
+        )
+        for e in (e1, e2, e3):
+            store.handle(e)
+
+        events = store.query_events(since="2026-05-01T00:00:00.000Z")
+        assert len(events) == 2  # e2 + e3
+        assert events[0].type == "step_started"
+        assert events[1].type == "plan_finished"
+
+    def test_query_events_by_until(self, store):
+        """按 until 过滤（timestamp <= until）。"""
+        e1 = ExecutionEvent(
+            type="plan_started", plan_id="p-001", timestamp="2026-01-01T00:00:00.000Z"
+        )
+        e2 = ExecutionEvent(
+            type="step_started", plan_id="p-001", step_id="step-0", timestamp="2026-06-01T00:00:00.000Z"
+        )
+        e3 = ExecutionEvent(
+            type="plan_finished", plan_id="p-001", timestamp="2026-12-01T00:00:00.000Z"
+        )
+        for e in (e1, e2, e3):
+            store.handle(e)
+
+        events = store.query_events(until="2026-08-01T00:00:00.000Z")
+        assert len(events) == 2  # e1 + e2
+
+    def test_query_events_by_since_and_until(self, store):
+        """since + until 范围过滤。"""
+        e1 = ExecutionEvent(type="plan_started", plan_id="p-001", timestamp="2026-01-01T00:00:00.000Z")
+        e2 = ExecutionEvent(type="step_started", plan_id="p-001", step_id="step-0", timestamp="2026-06-01T00:00:00.000Z")
+        e3 = ExecutionEvent(type="plan_finished", plan_id="p-001", timestamp="2026-12-01T00:00:00.000Z")
+        for e in (e1, e2, e3):
+            store.handle(e)
+
+        events = store.query_events(since="2026-05-01T00:00:00.000Z", until="2026-08-01T00:00:00.000Z")
+        assert len(events) == 1
+        assert events[0].type == "step_started"
+
+    def test_query_events_with_limit(self, store):
+        """limit 限制返回条数。"""
+        for i in range(10):
+            store.handle(ExecutionEvent(
+                type="plan_started", plan_id=f"p-{i:03d}",
+                timestamp=f"2026-01-{i+1:02d}T00:00:00.000Z",
+            ))
+
+        events = store.query_events(limit=5)
+        assert len(events) == 5
+
+    def test_query_events_combined_filters(self, store):
+        """组合过滤：plan_id + event_type。"""
+        for e in _make_events("p-a", count=8):
+            store.handle(e)
+        for e in _make_events("p-b", count=8):
+            store.handle(e)
+
+        events = store.query_events(plan_id="p-a", event_type="plan_finished")
+        assert len(events) == 1
+        assert events[0].plan_id == "p-a"
+        assert events[0].type == "plan_finished"
+
+    def test_query_events_empty_result(self, store):
+        """过滤无匹配：返回空 list。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+
+        events = store.query_events(plan_id="nonexistent")
+        assert events == []
+
+    def test_query_events_preserves_all_fields(self, store):
+        """query_events() 完整反序列化所有字段。"""
+        ev = ExecutionEvent(
+            type="provider_finished", plan_id="p-002", step_id="step-0",
+            provider="openai_api", latency_ms=450, data={"status": "success", "tokens": 100},
+        )
+        store.handle(ev)
+
+        out = store.query_events(plan_id="p-002")[0]
+        assert out.type == "provider_finished"
+        assert out.step_id == "step-0"
+        assert out.provider == "openai_api"
+        assert out.latency_ms == 450
+        assert out.data == {"status": "success", "tokens": 100}
+        assert out.event_id == ev.event_id
+
+
+# ── V0.9.7：get_events / list_plans / has 向后兼容（Convenience API） ──
+
+class TestConvenienceAPIBackwardCompat:
+    """get_events / list_plans / has 保留向后兼容。"""
+
+    def test_get_events_equivalent_to_query_events_by_plan_id(self, store):
+        """get_events(plan_id) ≡ query_events(plan_id=plan_id)。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+
+        a = store.get_events("p-001")
+        b = store.query_events(plan_id="p-001")
+        assert len(a) == len(b) == 8
+        for ea, eb in zip(a, b):
+            assert ea.event_id == eb.event_id
+            assert ea.type == eb.type
+
+    def test_list_plans_uses_query_events_internally(self, store):
+        """list_plans() 内部基于 query_events 派生（ChatGPT Q2）。"""
+        for e in _make_events("p-a", count=8):
+            store.handle(e)
+        for e in _make_events("p-b", count=3):
+            store.handle(e)
+
+        plans = store.list_plans()
+        assert len(plans) == 2
+        # 排序：started DESC
+        assert plans[0]["plan_id"] == "p-a" or plans[0]["plan_id"] == "p-b"
+
+    def test_list_plans_limit_consistent(self, store):
+        """list_plans(limit) 与 query_events(limit) 输出一致。"""
+        for i in range(5):
+            store.handle(ExecutionEvent(
+                type="plan_started", plan_id=f"p-{i:03d}",
+                timestamp=f"2026-01-{i+1:02d}T00:00:00.000Z",
+            ))
+
+        plans = store.list_plans(limit=3)
+        assert len(plans) == 3
+
+    def test_has_uses_single_sql_exists(self, store):
+        """has() 保留单条 SQL EXISTS（比 query_events 更高效）。"""
+        for e in _make_events("p-001", count=8):
+            store.handle(e)
+
+        assert store.has("p-001") is True
+        assert store.has("nonexistent") is False

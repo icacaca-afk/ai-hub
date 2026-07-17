@@ -1,11 +1,18 @@
 # AI Hub — SQLiteExecutionStore
 # V0.9.5: ExecutionEvent 持久化到 SQLite（EventBus 的独立 Consumer）
+# V0.9.7: query_events(...) 统一查询接口（ADR-0020）
 #
 # ADR-0018 (ChatGPT 审核通过 10.0/10):
 #   - EventBus 的独立 Consumer（不继承 TraceCollector）
 #   - 长连接 + WAL mode + synchronous=NORMAL
 #   - 普通 INSERT（非 OR REPLACE，符合 immutable 原则）
 #   - Storage Failure ≠ Execution Failure：handle() 内 catch 所有 sqlite 异常，log 不 re-raise
+#
+# ADR-0020 (ChatGPT 审核通过 9.95/10):
+#   - query_events(...) 统一查询接口（6 个 Optional 过滤 + limit）
+#   - provider 参数支持 str | list[str]（ChatGPT Q7 调整）
+#   - get_events / list_plans / has 保留向后兼容（Convenience API）
+#   - list_plans 内部基于 query_events 派生（ChatGPT Q2 明确）
 #
 # 与 TraceCollector 的关系（ADR-0018 + ChatGPT 反馈）：
 #   - TraceCollector: 进程内环形缓冲（Current Process Only），答「当前进程怎么发生的？」
@@ -49,7 +56,7 @@ def _resolve_db_path(custom: Optional[str | Path] = None) -> Path:
 
 
 class SQLiteExecutionStore:
-    """ExecutionEvent SQLite 持久化（V0.9.5）。
+    """ExecutionEvent SQLite 持久化（V0.9.5）+ 统一查询接口（V0.9.7）。
 
     EventBus 的独立 Consumer（不继承 ``InMemoryTraceCollector``）。
 
@@ -60,6 +67,11 @@ class SQLiteExecutionStore:
       触发 ``IntegrityError`` 被 catch + warning。
     - **Storage Failure ≠ Execution Failure**：``handle()`` 内 catch 所有 sqlite
       异常，log 但不 re-raise（持久化失败不影响执行主流程）。
+
+    V0.9.7 查询接口（ADR-0020）：
+    - ``query_events(...)`` 是唯一查询入口，所有 CLI（history / stats）基于它
+    - ``get_events`` / ``list_plans`` / ``has`` 保留为 Convenience API（向后兼容）
+    - ``list_plans`` 内部基于 ``query_events`` 派生（ChatGPT Q2 明确）
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
@@ -161,31 +173,124 @@ class SQLiteExecutionStore:
             )
 
     # ── 查询接口 ──
+    # V0.9.7：query_events() 是唯一查询入口（ADR-0020 决策 1）
+    # get_events / list_plans / has 是 Convenience API（向后兼容）
 
-    def get_events(self, plan_id: str) -> list[ExecutionEvent]:
-        """查询某 plan_id 的全部 events（按 timestamp 升序）。"""
-        rows = self._conn.execute(
-            "SELECT event_id, type, plan_id, timestamp, step_id, provider, latency_ms, data "
-            "FROM execution_events WHERE plan_id=? ORDER BY timestamp ASC",
-            (plan_id,),
-        ).fetchall()
+    def query_events(
+        self,
+        plan_id: str | None = None,
+        event_type: str | None = None,
+        provider: str | list[str] | None = None,
+        step_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int | None = None,
+    ) -> list[ExecutionEvent]:
+        """统一查询接口（ADR-0018 原则 C 落地 + ADR-0020 决策 1）。
+
+        所有参数 Optional，组合过滤（AND 语义）。返回 list[ExecutionEvent]（按 timestamp 升序）。
+
+        ChatGPT Q7 调整（ADR-0020）：provider 参数支持 str | list[str] | None。
+        - CLI 当前仍只传单 provider（--provider openai_api）
+        - 但接口已为未来 API 场景（provider=["a", "b"]）预留
+
+        Args:
+            plan_id: 按 plan_id 过滤
+            event_type: 按 event type 过滤（plan_started / step_finished / ...）
+            provider: 按 provider 过滤，支持单值或多值列表（多值走 IN 子句）
+            step_id: 按 step_id 过滤
+            since: ISO 8601 timestamp 下界（含）
+            until: ISO 8601 timestamp 上界（含）
+            limit: 最多返回 N 条（None = 不限）
+
+        Returns:
+            list[ExecutionEvent]（按 timestamp 升序）
+
+        Examples:
+            query_events(plan_id="plan-abc")              # 某 plan 的全部 events
+            query_events(event_type="provider_finished")  # 所有 provider_finished
+            query_events(provider="openai_api")           # 单 provider
+            query_events(provider=["openai_api", "openai_compatible"])  # 多 provider
+            query_events(since="2026-07-17T00:00:00Z")    # 某时刻之后
+            query_events(plan_id="plan-abc", event_type="step_finished")  # 组合过滤
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if plan_id is not None:
+            clauses.append("plan_id = ?")
+            params.append(plan_id)
+        if event_type is not None:
+            clauses.append("type = ?")
+            params.append(event_type)
+        if provider is not None:
+            # ChatGPT Q7: 支持 str | list[str]
+            if isinstance(provider, str):
+                clauses.append("provider = ?")
+                params.append(provider)
+            else:
+                # list[str] → IN (?, ?, ...)
+                if not provider:
+                    # 空列表：返回空结果（不可能匹配任何 provider）
+                    return []
+                placeholders = ", ".join("?" * len(provider))
+                clauses.append(f"provider IN ({placeholders})")
+                params.extend(provider)
+        if step_id is not None:
+            clauses.append("step_id = ?")
+            params.append(step_id)
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            "SELECT event_id, type, plan_id, timestamp, step_id, provider, "
+            f"latency_ms, data FROM execution_events{where} "
+            "ORDER BY timestamp ASC"
+        )
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+
+        rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_event(r) for r in rows]
 
+    def get_events(self, plan_id: str) -> list[ExecutionEvent]:
+        """Convenience API：等价于 ``query_events(plan_id=plan_id)``。
+
+        向后兼容 V0.9.5 接口。新代码应优先使用 ``query_events()``。
+        """
+        return self.query_events(plan_id=plan_id)
+
     def list_plans(self, limit: int = 20) -> list[dict[str, Any]]:
-        """列出最近 N 个 plan execution（按 started DESC）。
+        """Convenience API：列出最近 N 个 plan execution（按 started DESC）。
+
+        内部基于 ``query_events(event_type="plan_started")`` 派生（ChatGPT Q2 明确）。
+        不是独立查询系统，是 ``query_events()`` 的 helper。
 
         额外派生 ``status`` / ``step_count``（从 plan_started/plan_finished
         /planner_finished events 派生）。
         """
-        rows = self._conn.execute(
-            "SELECT plan_id, MIN(timestamp) as started, MAX(timestamp) as finished, "
-            "COUNT(*) as event_count FROM execution_events "
-            "GROUP BY plan_id ORDER BY started DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        # 通过 query_events 拿 plan_started events（落地 ADR-0018 原则 C）
+        plan_started_events = self.query_events(event_type="plan_started")
+        # query_events 返回升序，list_plans 需要 started DESC，反转后取 limit
+        plan_started_events_sorted = sorted(
+            plan_started_events, key=lambda e: e.timestamp, reverse=True
+        )[:limit]
+
         results: list[dict[str, Any]] = []
-        for row in rows:
-            plan_id, started, finished, event_count = row
+        for event in plan_started_events_sorted:
+            plan_id = event.plan_id
+            started = event.timestamp
+            # 对每个 plan，用聚合 SQL 拿 finished/event_count（高效，单次 SQL）
+            row = self._conn.execute(
+                "SELECT MAX(timestamp), COUNT(*) FROM execution_events WHERE plan_id=?",
+                (plan_id,),
+            ).fetchone()
+            finished = row[0] if row else None
+            event_count = int(row[1]) if row else 0
             results.append(
                 {
                     "plan_id": plan_id,
@@ -199,7 +304,10 @@ class SQLiteExecutionStore:
         return results
 
     def has(self, plan_id: str) -> bool:
-        """是否有该 plan_id 的 event。"""
+        """是否有该 plan_id 的 event。
+
+        保留单条 SQL EXISTS 实现（比 query_events 拉 events 更高效）。
+        """
         row = self._conn.execute(
             "SELECT 1 FROM execution_events WHERE plan_id=? LIMIT 1",
             (plan_id,),

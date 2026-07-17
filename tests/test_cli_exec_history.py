@@ -90,7 +90,7 @@ class TestCmdExecHistoryList:
         out = capsys.readouterr().out
 
         assert "AI Hub Execution History" in out
-        assert "v0.9.6" in out
+        assert "v0.9.7" in out
         assert "SQLite" in out
         assert "Recent Executions: 0" in out
         assert "no executions" in out.lower()
@@ -102,7 +102,7 @@ class TestCmdExecHistoryList:
         cmd_exec_history(["--json"])
         data = json.loads(capsys.readouterr().out)
 
-        assert data["version"] == "0.9.6"
+        assert data["version"] == "0.9.7"
         assert data["source"] == "sqlite"
         assert data["count"] == 0
         assert data["executions"] == []
@@ -198,7 +198,7 @@ class TestCmdExecHistoryTimeline:
         cmd_exec_history(["--plan", "p-002", "--json"])
         data = json.loads(capsys.readouterr().out)
 
-        assert data["version"] == "0.9.6"
+        assert data["version"] == "0.9.7"
         assert data["source"] == "sqlite"
         assert data["plan_id"] == "p-002"
         assert data["event_count"] == 6
@@ -262,7 +262,7 @@ class TestExecHistorySubprocess:
         rc, out, err = _run_cli("exec-history", "--json", db_path=db, timeout=15)
         assert rc == 0
         data = json.loads(out)
-        assert data["version"] == "0.9.6"
+        assert data["version"] == "0.9.7"
         assert data["count"] == 0
 
     def test_unknown_plan_subprocess(self, tmp_path):
