@@ -1,10 +1,11 @@
 # ADR-0019: V0.9.6 — Provider Metrics（Token / Cost 自动采集）
 
-- **状态**: Proposed
+- **状态**: Accepted（ChatGPT 外部审核 9.95/10 APPROVED）
 - **日期**: 2026-07-17
 - **里程碑**: V0.9.6
 - **关联**: ADR-0008（Core Freeze）、ADR-0017（Execution Event）、ADR-0018（SQLiteExecutionStore + Storage is Disposable）
 - **API Stability**: Experimental
+- **ChatGPT 审核**: 9.95/10 APPROVED（2026-07-17）
 - **前序审核**: [V0.9.5 代码 ChatGPT Review](../reviews/V0.9.5-code-chatgpt-review.md) — 10.0/10 APPROVED
 
 ## 背景
@@ -117,6 +118,25 @@ class MetricsRouter(Router):
 - 路由逻辑 = 选哪个 Provider；metadata 扩展 = 执行后附加信息
 - **结论**：子类化扩展 metadata 不违反 Core Freeze
 
+**ChatGPT 审核约束（9.95/10 APPROVED）**：
+
+> **MetricsRouter MUST NOT influence provider selection or routing decisions.**
+
+- 以后 `if token_cost > ...` 绝不能改变 `route()`
+- 否则 MetricsRouter 就从 **Execution Decoration** 变成 **Policy**
+- MetricsRouter 的职责是"附加执行后指标"，不是"决定路由策略"
+
+**MetricsRouter 的临时性质**（ChatGPT 建议）：
+
+> MetricsRouter is a temporary compatibility layer caused by the current BridgeResult → Result conversion.
+
+- MetricsRouter 是因为 Core Freeze 下不能改 `Router.execute()` 而引入的兼容层
+- **长期方案**（V2.0 Core Freeze 解冻后）：
+  - `BridgeResult → Result` 保留 raw extension
+  - 或 `BridgeResult` 支持 Metadata Extension
+- V0.9.x 的 MetricsRouter 不应演变成"万能 Router"（不断叠加 trace_id / billing / cache / retry / statistics）
+- V1.0 方向：统一为 `RuntimeRouter → Decorators`，而非多个 Router 子类
+
 ### 决策 2：MetricsExtractor 按 Provider 分发
 
 **新增** `planner/metrics/extractors.py`：
@@ -177,42 +197,78 @@ _HANDLERS = {
 - 符合 ADR-0018 原则 C（Event Query 统一，data 是 free-form）
 - 未来新增字段（如 `reasoning_tokens`）不用改类
 
-### 决策 3：Pricing 价格表
+### 决策 3：Pricing 接口化（ChatGPT 建议调整：抽成接口）
 
 **新增** `planner/metrics/pricing.py`：
 
+**ChatGPT 反馈**：
+
+> 继续静态。但是不要把 Pricing 写成一个 dict。建议抽成接口。
+> ```python
+> PricingProvider  # abstract
+> StaticPricing    # default
+> ```
+> 以后如果 pricing.json / GitHub / Remote API，都不用改 Executor。所以不是为了现在，而是隔离 Pricing 来源。
+
+**V0.9.6 实现**（接口 + 默认静态实现）：
+
 ```python
 # planner/metrics/pricing.py（新增）
+from abc import ABC, abstractmethod
+
+class PricingProvider(ABC):
+    """Pricing 来源接口（ChatGPT 建议：隔离 Pricing 来源）。
+
+    默认实现 StaticPricing 用静态 dict。
+    未来可替换为 JsonFilePricing / RemoteApiPricing / GitHubPricing。
+    """
+
+    @abstractmethod
+    def compute(self, model: str, token_in: int, token_out: int) -> float:
+        """返回估算成本（USD）。"""
+        ...
+
+
 # OpenAI 官方定价（USD per 1K tokens）
 # 来源：https://openai.com/pricing（手动维护，价格变动时更新）
-
-_PRICING = {
+_PRICING_TABLE = {
     # (input_per_1k, output_per_1k)
     "gpt-4":           (0.03, 0.06),
     "gpt-4-turbo":     (0.01, 0.03),
     "gpt-4o":          (0.0025, 0.01),
     "gpt-4o-mini":     (0.00015, 0.0006),
     "gpt-3.5-turbo":   (0.0005, 0.0015),
-    # 兜底
     "_default":        (0.01, 0.03),
 }
 
-class Pricing:
-    @staticmethod
-    def compute(model: str, token_in: int, token_out: int) -> float:
-        prices = _PRICING.get(model, _PRICING["_default"])
+
+class StaticPricing(PricingProvider):
+    """静态价格表实现（V0.9.6 默认）。"""
+
+    def compute(self, model: str, token_in: int, token_out: int) -> float:
+        prices = _PRICING_TABLE.get(model, _PRICING_TABLE["_default"])
         return round(token_in / 1000 * prices[0] + token_out / 1000 * prices[1], 6)
+
+
+# 模块级默认实例（MetricsExtractor 使用）
+_default_pricing = StaticPricing()
+
+
+def get_default_pricing() -> PricingProvider:
+    """获取默认 PricingProvider（可被替换）。"""
+    return _default_pricing
 ```
 
-**为什么手动维护价格表？**
-- OpenAI API 不返回单价（只返回 token 数）
-- 价格表是静态配置，不频繁变动
-- 未来可扩展为从配置文件 / 环境变量加载
+**为什么接口化？**
+- 隔离 Pricing 来源（ChatGPT 建议）
+- 未来 `pricing.json` / GitHub / Remote API 只需新增子类，不改 Extractor
+- 符合依赖倒置原则
 
 **价格表准确性**：
 - V0.9.6 是"近似成本估算"，不是"精确计费"
 - 用户应以 Provider 官方账单为准
 - ADR 明确：cost_usd 是估算值，不作为计费依据
+- CLI 输出必须标注 "Estimated"（见决策 8）
 
 ### 决策 4：PlanExecutor 改造
 
@@ -309,7 +365,7 @@ router = MetricsRouter(registry, ...)
 
 **`metadata.schema_version` 维持 "1"**。
 
-### 决策 8：CLI 查看 Metrics
+### 决策 8：CLI 查看 Metrics（ChatGPT 建议调整：标注 Estimated）
 
 **新增命令**（或扩展现有命令）：
 
@@ -318,11 +374,21 @@ ai-hub exec-history --plan <plan_id>          # 已有，timeline 现在显示 t
 ai-hub exec-history --plan <plan_id> --json   # 已有，JSON 现在包含 server_metrics
 ```
 
+**ChatGPT 反馈**：
+
+> cost 一定要标注。
+> CLI 不要：`Cost: $0.0021`
+> 而是：`Estimated Cost: $0.0021` 或 `≈ $0.0021`
+> 这是用户预期的问题。不要让用户认为这是账单。
+
 **timeline 输出增强**（`cli/history.py` 的 `_describe_event`）：
 
 ```
-12:01:00.123  0.1s  provider_finished  (openai_api, 500ms, success, in=120 out=45 cost=$0.0021)
+12:01:00.123  0.1s  provider_finished  (openai_api, 500ms, success, in=120 out=45 ≈$0.0021)
 ```
+
+- cost 前用 `≈` 符号明确标注是估算值
+- JSON 输出的 `cost_usd` 字段加 `"estimated": true` 标注
 
 **不新增独立 metrics 命令**：
 - V0.9.6 范围克制
@@ -477,6 +543,61 @@ ai-hub exec-history --plan <plan_id> --json   # 已有，JSON 现在包含 serve
 7. **server_metrics 入 data 还是独立字段**：当前方案把 server_metrics 放在 `ExecutionEvent.data["server_metrics"]`。是否应该在 ExecutionEvent 加独立 `server_metrics` 字段？（倾向不改，遵循 Postel's Law）
 8. **V0.9.6 范围克制**：不做 stats 命令 / query_events / 动态价格表 / 成本告警。是否太保守或正好？
 
+## V0.9.6 ADR 审核补充原则（ChatGPT 9.95/10 APPROVED）
+
+> 完整审核：[V0.9.6 ADR ChatGPT Review](../reviews/V0.9.6-adr-chatgpt-review.md)
+>
+> 8 个确认问题全部认可。ChatGPT 主动补充 2 项设计原则 + 1 项架构风险提醒。
+
+### 原则 E：ExecutionMetrics vs server_metrics 分层
+
+> **ExecutionMetrics 是 Runtime 的标准指标；server_metrics 是 Provider 的原始指标。**
+> **ExecutionMetrics 可以由 server_metrics 派生，但 Runtime 不应依赖某一 Provider 的原始字段。**
+
+**分层关系**：
+```
+server_metrics (Provider Domain, dict)
+    ↓ 派生
+ExecutionMetrics (Runtime Domain, dataclass)
+    ↓ 聚合
+Statistics (V0.9.7)
+```
+
+**禁止**：
+- Statistics 直接读取 `server_metrics["prompt_tokens"]`
+- Runtime 代码出现 `if provider == "openai_api"` 的 provider 特定逻辑
+
+**允许**：
+- MetricsExtractor 按 provider name 分发提取（这是 Provider Domain 的适配层）
+- ExecutionMetrics 只暴露通用字段（token_in / token_out / cost_usd / latency_ms）
+
+**意义**：
+- Runtime 不知道 OpenAI 的 `usage.prompt_tokens` 还是 Anthropic 的 `input_tokens`
+- Provider 变化不影响 Runtime
+- 新增 Provider 只需在 MetricsExtractor 加 handler，不改 Runtime
+
+### 原则 F：MetricsRouter 职责边界
+
+> **MetricsRouter is a temporary compatibility layer caused by the current BridgeResult → Result conversion.**
+
+**职责**：
+- ✅ 附加 server_metrics 到 Result.metadata
+- ✅ 调用 MetricsExtractor 提取 Provider 指标
+
+**禁止**：
+- ❌ 影响 provider selection（`route()` 不变）
+- ❌ 叠加 trace_id / billing / cache / retry / statistics 等其他增强逻辑
+- ❌ 演变成"万能 Router"
+
+**退出路径**（V2.0 Core Freeze 解冻后）：
+- `BridgeResult → Result` 保留 raw extension
+- 或 `BridgeResult` 支持 Metadata Extension
+- 届时 MetricsRouter 可回归更合适的扩展点
+
+**V1.0 方向**：
+- 统一为 `RuntimeRouter → Decorators`
+- 而非 `MetricsRouter` / `HistoryRouter` / `LoggingRouter` 多个子类并存
+
 ## 后续路线
 
 ```
@@ -491,4 +612,28 @@ V1.0    Workflow Runtime on Event Model
 
 ## 审核状态
 
-> V0.9.6 ADR-0019 Proposed，待 ChatGPT 外部审核。
+### ADR 审核（Proposed → Accepted）
+
+> ChatGPT：9.95/10 APPROVED（Proposed → Accepted）
+>
+> 原文：*「ADR-0019 保持了 V0.9.x 一直以来的设计风格：不修改冻结的核心层，而是在边界之外新增能力。MetricsRouter 在目前的约束下属于一种兼容层，而不是对路由策略本身的修改。」*
+>
+> 完整审核：[V0.9.6 ADR ChatGPT Review](../reviews/V0.9.6-adr-chatgpt-review.md)
+
+**采纳的调整**：
+1. ✅ MetricsRouter 约束：MUST NOT influence provider selection（决策 1）
+2. ✅ Pricing 接口化：PricingProvider + StaticPricing（决策 3）
+3. ✅ CLI 输出标注 "≈" 估算符号（决策 8）
+4. ✅ MetricsRouter 临时性质声明 + V2.0 退出路径（原则 F）
+5. ✅ ExecutionMetrics vs server_metrics 分层原则（原则 E）
+
+**确认 OK 的决策**：
+- ✅ MetricsExtractor 返回 dict（不定义 ServerMetrics dataclass）
+- ✅ gemini_cli / qoder token 为 0（不改 Provider）
+- ✅ plan 用 MetricsRouter / ask 用 ScoreRouter（V1.0 统一）
+- ✅ server_metrics 放 event.data（不新增 ExecutionEvent 字段）
+- ✅ V0.9.6 范围克制
+
+---
+
+> V0.9.6 ADR Accepted（9.95/10）。进入实施阶段。
