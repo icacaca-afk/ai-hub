@@ -1,11 +1,13 @@
 # ADR-0020: V0.9.7 — Execution Analytics（query_events + Statistics）
 
-- **状态**: Proposed（待 ChatGPT 外部审核）
+- **状态**: Accepted（ChatGPT 外部审核 9.95/10 APPROVED）
 - **日期**: 2026-07-17
 - **里程碑**: V0.9.7
 - **关联**: ADR-0008（Core Freeze）、ADR-0017（Execution Event）、ADR-0018（SQLiteExecutionStore + 原则 C: Event Query 统一）、ADR-0019（Provider Metrics）
 - **API Stability**: Experimental
+- **ChatGPT 审核**: 9.95/10 APPROVED（2026-07-17）
 - **前序审核**: [V0.9.6 代码 ChatGPT Review](../reviews/V0.9.6-code-chatgpt-review.md) — 10.0/10 APPROVED (Final)
+- **本版审核**: [V0.9.7 ADR ChatGPT Review](../reviews/V0.9.7-adr-chatgpt-review.md) — 9.95/10 APPROVED
 
 ## 背景
 
@@ -70,7 +72,7 @@ def query_events(
     self,
     plan_id: str | None = None,
     event_type: str | None = None,
-    provider: str | None = None,
+    provider: str | list[str] | None = None,   # ChatGPT Q7: 支持单/多 provider
     step_id: str | None = None,
     since: str | None = None,        # ISO 8601 timestamp
     until: str | None = None,        # ISO 8601 timestamp
@@ -80,16 +82,22 @@ def query_events(
 
     所有参数 Optional，组合过滤。返回 list[ExecutionEvent]（按 timestamp 升序）。
 
+    ChatGPT Q7 调整：provider 参数支持 str | list[str] | None。
+    - CLI 当前仍只传单 provider（`--provider openai_api`）
+    - 但接口已为未来 API 场景（`provider=["a", "b"]`）预留
+    - CLI 不用变，接口已经准备好了
+
     Examples:
         query_events(plan_id="plan-abc")              # 某 plan 的全部 events
         query_events(event_type="provider_finished")  # 所有 provider_finished
-        query_events(provider="openai_api")           # 某 provider 的全部 events
+        query_events(provider="openai_api")           # 单 provider
+        query_events(provider=["openai_api", "openai_compatible"])  # 多 provider (ChatGPT Q7)
         query_events(since="2026-07-17T00:00:00Z")    # 某时刻之后
         query_events(plan_id="plan-abc", event_type="step_finished")  # 组合过滤
     """
 ```
 
-**实现**：动态构建 WHERE 子句 + 参数列表：
+**实现**：动态构建 WHERE 子句 + 参数列表（provider 支持 IN 子句）：
 
 ```python
 def query_events(self, plan_id=None, event_type=None, provider=None,
@@ -101,7 +109,14 @@ def query_events(self, plan_id=None, event_type=None, provider=None,
     if event_type is not None:
         clauses.append("type = ?"); params.append(event_type)
     if provider is not None:
-        clauses.append("provider = ?"); params.append(provider)
+        # ChatGPT Q7: 支持 str | list[str]
+        if isinstance(provider, str):
+            clauses.append("provider = ?"); params.append(provider)
+        else:
+            # list[str] → IN (?, ?, ...)
+            placeholders = ", ".join("?" * len(provider))
+            clauses.append(f"provider IN ({placeholders})")
+            params.extend(provider)
     if step_id is not None:
         clauses.append("step_id = ?"); params.append(step_id)
     if since is not None:
@@ -120,13 +135,13 @@ def query_events(self, plan_id=None, event_type=None, provider=None,
     return [self._row_to_event(r) for r in rows]
 ```
 
-**为什么不引入 QueryBuilder / DSL？**
-- 当前 6 个过滤维度足够（plan_id / type / provider / step_id / since / until）
-- SQL 拼接简单清晰，参数化防注入
-- ChatGPT V0.9.5 已建议"不要过度设计"
-- V1.0+ 若需要复杂查询（OR / LIKE / ORDER BY 自定义），再引入 QueryBuilder
+**为什么不引入 QueryBuilder / DSL？**（ChatGPT Q1 完全赞同）
+- 当前查询复杂度只有 AND，没有 OR / NOT / GROUP / HAVING / ORDER BY / JOIN
+- DSL 没有任何收益
+- ChatGPT 明确："现在会明显过度设计"
+- 等 V1.x 真出现 `(provider=A OR provider=B) AND latency>1000 AND status=failed` 再设计 QueryBuilder
 
-### 决策 2：旧接口保留（向后兼容）
+### 决策 2：旧接口保留（向后兼容）+ Convenience API 标注
 
 **保留** `get_events(plan_id)` / `list_plans(limit)` / `has(plan_id)`：
 
@@ -141,12 +156,28 @@ def has(self, plan_id: str) -> bool:
     ...
 ```
 
+**ChatGPT Q2 建议明确**：`list_plans()` 是 **Convenience API, implemented via query_events()**。
+
+文档必须写清楚：`query_events()` 和 `list_plans()` 不是两套查询系统，`list_plans()` 只是 `query_events(event_type="plan_started")` 的 helper。
+
 **为什么保留？**
 - 现有测试 / CLI 代码不破坏
-- `list_plans()` 是"派生视图"（GROUP BY plan_id），不属于 Event Query 层，保留方便
-- `has()` 是 EXISTS 探针，比 `query_events()` 拉 events 更高效
+- `list_plans()` 作为便利方法保留，但内部基于 `query_events()` 派生（落地原则 C）
+- `has()` 是 EXISTS 探针，比 `query_events()` 拉 events 更高效（单条 SQL）
 
 **`list_plans()` 重构**：内部改用 `query_events(event_type="plan_started")` 派生 plan 列表（落地原则 C），但对外接口不变。
+
+```python
+def list_plans(self, limit: int = 20) -> list[dict[str, Any]]:
+    """Convenience API：列出最近 N 个 plan execution。
+
+    内部基于 query_events(event_type="plan_started") 派生（ChatGPT Q2 明确）。
+    不是独立查询系统，是 query_events() 的 helper。
+    """
+    plan_started_events = self.query_events(event_type="plan_started", limit=limit)
+    # 从 plan_started events 派生 plan 列表（含 started/finished/event_count/status/step_count）
+    ...
+```
 
 ### 决策 3：`ai-hub stats` 命令
 
@@ -269,7 +300,7 @@ class ExecutionStatistics:
 - 与 `ExecutionMetrics` / `ExecutionEvent` 一致（都是 dataclass）
 - `to_dict()` 支持 JSON 序列化
 
-### 决策 5：`StatisticsCollector`（从 events 派生统计）
+### 决策 5：`StatisticsCollector`（从 events 派生统计）— Read-Only Projection
 
 **新增** `planner/statistics.py` 内的 `StatisticsCollector`：
 
@@ -280,19 +311,33 @@ class StatisticsCollector:
     纯计算类，不接触 SQLite / EventBus。
     输入：list[ExecutionEvent]（来自 query_events()）
     输出：ExecutionStatistics
+
+    ⚠️ ChatGPT 唯一建议补充的原则（0.05 分）：
+    StatisticsCollector MUST be a pure read-only projection.
+    - 绝不修改 ExecutionEvent
+    - 绝不补 ExecutionEvent
+    - 绝不缓存 ExecutionEvent
+    - 绝不写回 SQLite
+    这是 Event Sourcing 的重要原则：Analytics Never Mutates Events。
     """
 
     @staticmethod
     def compute(events: list[ExecutionEvent]) -> ExecutionStatistics:
-        """从 events 派生统计。
+        """从 events 派生统计（Pure Read-Only Projection）。
 
         识别的 event 类型：
         - plan_started / plan_finished → plan_total / success / failed
         - step_started / step_finished → step_total
         - provider_finished → provider stats（latency / token / cost）
+
+        本方法无副作用：
+        - 不修改入参 events
+        - 不接触任何 Store / EventBus
+        - 不缓存
+        - 不写回
         """
         stats = ExecutionStatistics()
-        # ... 单次遍历 events，按 type 分发累积 ...
+        # ... 单次遍历 events，按 type 分发累积（只读访问）...
         return stats
 ```
 
@@ -300,6 +345,16 @@ class StatisticsCollector:
 - 单一职责：SQLiteExecutionStore 负责"存 + 查"，StatisticsCollector 负责"算"
 - 可测试性：纯函数式计算，不需要 DB fixture
 - 未来可复用：TraceCollector 的内存 events 也能用同一个 collector
+- **Read-Only Projection 原则**（ChatGPT 唯一补充建议）：
+  - StatisticsCollector 是 Event Sourcing 中的 Projection
+  - Event 是 Source of Truth，Statistics 是派生视图
+  - 派生视图绝不能反向修改 Source
+  - 否则 Analytics 会慢慢污染 Storage，破坏 Event 不可变性
+
+**ChatGPT 引言**：
+> Analytics Never Mutates Events
+> StatisticsCollector MUST be a pure read-only projection.
+> 这是 Event Sourcing 很重要的一条原则。
 
 ### 决策 6：`cli/history.py` 重构（基于 query_events）
 
@@ -528,4 +583,6 @@ V1.0    Workflow Runtime on ExecutionEvent（Condition / Retry / Checkpoint / Re
 
 ---
 
-> V0.9.7 ADR Proposed。等 ChatGPT ADR 审核后实施。
+> V0.9.7 ADR Accepted（ChatGPT 外部审核 9.95/10 APPROVED）。
+> 采纳 2 项调整（provider list[str] + list_plans Convenience API 标注）+ 1 条原则（Read-Only Projection）。
+> 进入实施阶段。
