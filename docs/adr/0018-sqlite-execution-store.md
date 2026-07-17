@@ -548,18 +548,89 @@ def handle(self, event: ExecutionEvent) -> None:
 7. **list_plans 查询**：从 events 表派生 plan 列表（GROUP BY plan_id）vs 维护单独的 plans 索引表？
 8. **V0.9.5 范围克制**：不做 cleanup / TTL / 后台队列 / token cost，只做持久化 + history 查询。是否太保守或正好？
 
+## V0.9.5 代码审核补充原则（ChatGPT 10.0/10 APPROVED）
+
+> 完整审核：[V0.9.5 代码 ChatGPT Review](../reviews/V0.9.5-code-chatgpt-review.md)
+>
+> 6 个确认问题全部认可当前实现，**代码层面无需修改**。ChatGPT 主动补充 3 项设计原则，记录于此供后续版本遵循。
+
+### 原则 A：Storage is Disposable
+
+> **Persistent stores are derived from ExecutionEvent and may be recreated at any time.**
+
+**含义**：
+- SQLiteExecutionStore（以及未来的任何持久化 Consumer）不是 Source of Truth
+- ExecutionEvent 才是 Runtime 的唯一执行事实来源（继承 ADR-0017）
+- 即使 `rm execution.db`，Runtime 仍然可以正常运行
+- Storage 只是"派生缓存"，不是"Runtime 组成部分"
+
+**意义**：
+- Migration：未来 schema 变更可重建 DB
+- Backup：可从 Event 流重建任意时刻的 Storage 状态
+- Import / Export：统一以 Event 为载体
+- Consumer 独立性：任何 Storage 失败/重建不影响其他 Consumer
+
+### 原则 B：ExecutionEvent.data JSON 可序列化约束
+
+> **ExecutionEvent.data 应仅包含 JSON 可序列化的数据（dict、list、str、int、float、bool、null）。**
+
+**含义**：
+- `ensure_ascii=False` 足够处理 Unicode（中文 / 日文 / Emoji）
+- 但 `bytes` / `datetime` / `UUID` / `Path` 等 Python 类型禁止放入 `data`
+- 这些类型应转为基础类型后再 emit
+
+**落地**：
+- `ExecutionEvent` 构造时不强制校验（避免性能开销），但在 ADR 层明确为契约
+- Provider / Planner / Executor 在 emit 前自行转换
+- 未来若发现频繁违反，再考虑加 `_validate_data()` 守卫
+
+### 原则 C：Event Query 统一（V0.9.7+ 方向）
+
+> 所有 Query 围绕 Event（`query_events(...)`），不要 `get_plan(...)`。
+
+**含义**：
+- History / Timeline / Statistics 全部由 Event 派生
+- ExecutionStore 始终只是 Event Store，**不会慢慢演变成 Workflow DB**
+- 不提前建 `plans` 表（V0.9.5 的 GROUP BY 派生方案延续）
+
+**V0.9.7 落地**：
+```python
+# 统一查询接口（V0.9.7 Statistics 时引入）
+query_events(plan_id=...)
+query_events(event_type=...)
+query_events(provider=...)
+query_events(since=..., until=...)
+```
+
+### 原则 D：V1.0 主题 — Workflow Runtime on Event Model
+
+> V1.0 不是 "Workflow Runtime"，而是 **Workflow Runtime on Event Model**。
+
+**含义**：
+- Workflow 不绕过 ExecutionEvent，而是继续发 ExecutionEvent
+- 所有 Workflow 事件都是 ExecutionEvent 的子类型：
+  - `ConditionEvaluated`
+  - `RetryStarted` / `RetryFinished`
+  - `CheckpointCreated`
+  - `ResumeStarted` / `ResumeFinished`
+
+**意义**：
+- Timeline / SQLite / Metrics 完全不用改
+- V1.0 的演进非常平滑（只是新增 Event 类型，不改 Consumer）
+- 印证 "ExecutionEvent 是 Runtime 唯一执行事实来源" 的设计价值
+
 ## 后续路线（ChatGPT 建议的 V0.9.x 演进）
 
-ChatGPT V0.9.5 ADR 审核建议的演进顺序：
+ChatGPT V0.9.5 ADR + 代码审核建议的演进顺序：
 
 ```
-V0.9.5  SQLite Event Store（本版本）
+V0.9.5  SQLite Event Store（本版本）✅ 10.0/10 APPROVED
   ↓
 V0.9.6  Provider Metrics（Token / Cost — Provider 返回 server_metrics → Runtime 转）
   ↓
-V0.9.7  Statistics（success rate / avg latency — 全部由 Event 派生）
+V0.9.7  Statistics（success rate / avg latency — query_events 统一查询接口）
   ↓
-V1.0    Workflow Runtime（Dependency → Conditional → Retry → Checkpoint → Resume）
+V1.0    Workflow Runtime on Event Model（Condition / Retry / Checkpoint / Resume 都是 ExecutionEvent）
 ```
 
 > ChatGPT：「不要急着进入 Workflow，把 Runtime 的观测能力打磨完整，会让 V1.0 更稳。」
@@ -568,10 +639,13 @@ V1.0    Workflow Runtime（Dependency → Conditional → Retry → Checkpoint �
 - 所有 Query 围绕 Event（`query_events(...)`），不要 `get_plan(...)`
 - History / Timeline / Statistics 全部由 Event 派生
 - ExecutionStore 始终只是 Event Store，不是 Workflow Store
+- Workflow Runtime 继续发 ExecutionEvent，不改 Consumer
 
 ---
 
 ## 审核状态
+
+### ADR 审核（Proposed → Accepted）
 
 > ChatGPT：10.0/10 APPROVED（Proposed → Accepted）
 >
@@ -593,6 +667,28 @@ V1.0    Workflow Runtime（Dependency → Conditional → Retry → Checkpoint �
 - ✅ GROUP BY 派生 plan 列表
 - ✅ 范围克制（只做持久化 + 查询）
 
+### 代码审核（实施后）
+
+> ChatGPT：10.0/10 APPROVED
+>
+> 原文：*「从 V0.8 到 V0.9.5，ai-hub 已经完成了从"Provider Router"到"事件驱动 Runtime"的核心架构转型，且保持了 Core Freeze。」*
+>
+> 完整审核：[V0.9.5 代码 ChatGPT Review](../reviews/V0.9.5-code-chatgpt-review.md)
+
+**6 个确认问题全部认可当前实现**（代码层面无需修改）：
+1. ✅ list_plans 派生方案（优先 planner_finished.step_count，回退 COUNT(DISTINCT step_id)）
+2. ✅ exec-history 命名（保留，CLI Help 写 "Execution History"）
+3. ✅ _describe_event 不抽 utils（Rule of Three，等第三个 Consumer 再抽）
+4. ✅ lazy init 保留（创建空 DB 是 Empty State，不是错误）
+5. ✅ 每 event commit（Crash Safety 优先于性能）
+6. ✅ ensure_ascii=False（补充 data JSON 可序列化约束 → 原则 B）
+
+**3 项设计原则补充**（见上文"V0.9.5 代码审核补充原则"）：
+- 原则 A：Storage is Disposable
+- 原则 B：ExecutionEvent.data JSON 可序列化约束
+- 原则 C：Event Query 统一（V0.9.7+ 方向）
+- 原则 D：V1.0 主题 "Workflow Runtime on Event Model"
+
 ---
 
-> V0.9.5 ADR 已 Accepted，可进入实施阶段。
+> V0.9.5 ADR + 代码双审均 Accepted（10.0/10）。V0.9.x 观察链闭环。进入 V0.9.6 规划。
