@@ -1,12 +1,38 @@
 # ADR-0017: V0.9.4 — Execution Event + Metrics + Trace
 
-- **状态**: Proposed（待 ChatGPT 审核）
+- **状态**: Accepted（ChatGPT 外部审核 10.0/10 APPROVED）
 - **日期**: 2026-07-17
 - **里程碑**: V0.9.4
 - **关联**: ADR-0008（Core Freeze）、ADR-0013（Planner 骨架）、ADR-0014（CLI + metadata 分层）、ADR-0015（LLM Planner + 语义）、ADR-0016（CLI --json + inspect + schema_version）
 - **API Stability**: Experimental
-- **ChatGPT 审核**: 待 V0.9.4 完成后发送
+- **ChatGPT 审核**: 10.0/10 APPROVED（2026-07-17）
 - **前序审核**: [V0.9.3 ChatGPT Review](../reviews/V0.9.3-chatgpt-review.md) — 9.98/10 APPROVED
+
+## ⚠️ 核心设计原则（ChatGPT 审核强建议加入）
+
+> **ExecutionEvent 是 Runtime 唯一的执行事件来源（Single Source of Execution Truth）**
+>
+> 所有 Trace、Metrics、History、UI 都应基于 ExecutionEvent 派生，而不是直接读取 Executor 内部状态。
+>
+> ```
+> Executor
+>    │
+>    ▼
+> ExecutionEvent
+>    │
+>    ├── TraceCollector (V0.9.4)
+>    ├── MetricsCollector (V0.9.5+)
+>    ├── SQLite ExecutionStore (V0.9.5+)
+>    ├── JSON Exporter (V0.9.4+)
+>    └── Future UI
+> ```
+>
+> 以后新增任何观察能力，都不用侵入 Executor。
+
+**实施影响**：
+- `PlanExecutor` 内部不再提供 get_trace() / get_metrics() 这类方法
+- 所有可观察数据通过 EventBus 流出，由 Consumer 派生
+- PlanExecutor.execute() 只关心 emit，不关心 consume
 
 ## 背景
 
@@ -50,16 +76,23 @@ ChatGPT V0.9.3 审核明确建议 V0.9.4 方向（按优先级）：
 
 ```python
 # planner/execution_event.py（新增）
+import uuid
+
 @dataclass
 class ExecutionEvent:
     type: str                        # event type (上述表格)
     timestamp: str                   # ISO 8601
     plan_id: str                     # 关联 Plan
+    event_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # 唯一键（ChatGPT 建议）
     step_id: str | None = None       # 关联 Step（plan-level event 为 None）
     provider: str | None = None      # provider-level event 携带
-    latency_ms: int | None = None    # timing event 携带
+    latency_ms: int | None = None    # 显式仅记录 Provider latency（Step/Plan 由 Consumer 派生）
     data: dict[str, Any] = field(default_factory=dict)
 ```
+
+**为什么加 event_id？**（ChatGPT 建议）
+
+未来：Execution History / Replay / Filtering 都需要唯一键。timestamp 不是唯一键。
 
 ### 决策 2：EventBus（事件分发）
 
@@ -72,19 +105,39 @@ class EventBus:
 
     V0.9.4 简单实现：list of callable subscribers。
     V0.9.5+ 持久化或并发场景时，可替换为 SQLite/Redis 持久化总线。
-    """
-    def __init__(self):
-        self._subscribers: list[Callable[[ExecutionEvent], None]] = []
 
-    def subscribe(self, handler: Callable[[ExecutionEvent], None]) -> None: ...
-    def emit(self, event: ExecutionEvent) -> None: ...  # 同步回调
-    def clear(self) -> None: ...  # 测试用
+    API Stability: Experimental
+    """
+
+    def subscribe(self, event_type: str | None, handler: Callable[[ExecutionEvent], None]) -> None:
+        """订阅事件。
+
+        Args:
+            event_type: 事件类型（V0.9.4 内部暂不过滤，传 None 表示订阅所有）。
+                       接口预留以保证未来可升级（ChatGPT 建议）。
+            handler: 回调函数（同步执行，异常 try/except 隔离）。
+        """
+
+    def emit(self, event: ExecutionEvent) -> None:
+        """同步分发事件。"""
+
+    def clear(self) -> None:  # 测试用
+        ...
 ```
 
 **为什么简单实现？**
 - 单进程单线程（CLI 顺序调用），不需要 async
 - 订阅者模式允许未来加 SQLite consumer / 内存 trace / 日志，无需改 emit 端
 - ChatGPT：「SQLite / JSON / Memory 都只是 Consumer」
+
+**不引入**（ChatGPT 强建议）：
+- ❌ priority（优先级）
+- ❌ wildcard（通配符订阅）
+- ❌ event hierarchy（事件继承）
+- ❌ async（异步分发）
+- ❌ sticky event（粘性事件）
+
+这些都会增加维护成本，V0.9.5+ 需要时再升级。
 
 ### 决策 3：ExecutionMetrics（与 ExecutionResult 解耦）
 
@@ -94,18 +147,24 @@ class EventBus:
 > ExecutionResult 以后容易越来越胖。
 > 建议单独 ExecutionMetrics { latency_ms / token_in / token_out / cost / retry }。
 
-**新数据结构**：
+**新数据结构**（只含可测量字段，ChatGPT 强建议）：
 
 ```python
 # planner/execution_metrics.py（新增）
 @dataclass
 class ExecutionMetrics:
+    """可测量的执行指标。
+
+    只包含「可测量」字段（ChatGPT 强建议）：
+    - latency / token / cost / retry
+    不含：status / provider / error（这些不是 Metrics，是 Result）。
+    """
     latency_ms: int = 0
     token_in: int = 0
     token_out: int = 0
     cost_usd: float = 0.0
     retry_count: int = 0
-    # 未来扩展
+    # 未来扩展（保留字段，不启用）
     # cache_hit: bool = False
     # queue_wait_ms: int = 0
     # network_latency_ms: int = 0
@@ -192,40 +251,54 @@ class InMemoryTraceCollector:
     """进程内 Trace 收集器（订阅 EventBus，存最近 N 个 plan 的 events）。
 
     与 PlanStore 类似：环形缓冲，不持久化。
-    区别：PlanStore 存 Plan（业务），TraceCollector 存 events（过程）。
+    区别：
+    - PlanStore 存 Plan（业务）
+    - TraceCollector 存 events（过程）
     """
+
     def __init__(self, max_plans: int = 10):
         self._events: dict[str, list[ExecutionEvent]] = {}
         self._max = max_plans
-        # 自动订阅
-        self._bus: EventBus | None = None
 
     def attach(self, bus: EventBus) -> None:
-        """订阅 EventBus。"""
-        self._bus = bus
-        bus.subscribe(self.handle)
+        """订阅 EventBus（V0.9.4 订阅所有 event_type）。"""
+        bus.subscribe(None, self.handle)
 
     def handle(self, event: ExecutionEvent) -> None:
         """EventBus 回调：存到对应 plan_id 的 events 列表。"""
-        ...
 
     def get_trace(self, plan_id: str) -> list[ExecutionEvent]: ...
+    def has(self, plan_id: str) -> bool:
+        """是否有该 plan_id 的 trace（ChatGPT 建议 D5：建立关联）。"""
+        return plan_id in self._events
     def list_traced_plans(self) -> list[str]: ...
+    def clear(self) -> None: ...  # 测试用
 ```
 
-**为什么独立于 PlanStore？** —— ChatGPT 建议：「PlanStore + ExecutionStore 职责不同」。V0.9.4 让两者解耦，为 V0.9.5+ 分裂做准备。
+**为什么独立于 PlanStore？** —— ChatGPT 建议（D5）：
 
-### 决策 8：ai-hub trace 命令
+> PlanStore 回答「发生了什么？」，Trace 回答「怎么发生的？」
+> 不要统一 Store。建立关联：
+> - TraceCollector.has(plan_id)
+> - PlanStore.trace_available
+> - inspect 显示 "Trace: Available/No Trace"
+
+**V0.9.4 实施**：
+- TraceCollector.has(plan_id) 强制实现
+- PlanStore 在 V0.9.4 不修改（V0.9.5+ 加 trace_available）
+- `cli/inspect` 显示 "Trace: Available" 或 "Trace: No Trace"
+
+### 决策 8：ai-hub trace 命令（Timeline 视图）
 
 **新增 CLI**：
 
 ```
-ai-hub trace <plan_id>           时间线（人类可读）
-ai-hub trace <plan_id> --json    时间线 JSON
-ai-hub trace --list              列出所有被 trace 的 plan_id
+ai-hub trace <plan_id>           Timeline（人类可读）
+ai-hub trace <plan_id> --json    Timeline JSON
+ai-hub trace --list              列出被 trace 的 plan_id
 ```
 
-**时间线输出示例**（人类可读）：
+**Timeline 输出示例**（人类可读，ChatGPT 强建议）：
 
 ```
 AI Hub Trace — v0.9.4 (Current Process Only)
@@ -234,18 +307,21 @@ Plan: fake-plan-001
 Task: task-fake-plan-001
 Status: SUCCESS
 
-Timeline (8 events, 0.5s total):
-  0.0s  plan_started
-  0.0s  planner_started (RuleBasedPlanner)
-  0.0s  planner_finished (2 steps)
-  0.1s  step_started [step-0: hello]
-  0.1s  provider_selected (ScoreRouter → fake)
-  0.3s  provider_finished (fake, 200ms)
-  0.3s  step_finished [step-0: SUCCESS, 200ms]
-  0.3s  step_started [step-1: world]
-  ...
-  0.5s  plan_finished (SUCCESS, 500ms)
+Timeline (8 events):
+  12:01:00.000  0.0s  plan_started
+  12:01:00.001  0.0s  planner_started (RuleBasedPlanner)
+  12:01:00.020  0.0s  planner_finished (2 steps)
+  12:01:00.100  0.1s  step_started [step-0: hello]
+  12:01:00.105  0.1s  provider_selected (ScoreRouter → fake)
+  12:01:00.305  0.3s  provider_finished (fake, 200ms)
+  12:01:00.305  0.3s  step_finished [step-0: SUCCESS, 200ms]
+  12:01:00.500  0.5s  plan_finished (SUCCESS, 500ms)
 ```
+
+**ChatGPT 建议（D6）**：trace 是 Timeline，不是 log。所以：
+- 真实时间戳（`12:01:00.000`）
+- 相对时间（`0.0s`, `0.3s`）
+- 派生 Step/Plan latency（不显式记录 Event.latency，只记 Provider）
 
 **Trace JSON schema**：
 
@@ -269,11 +345,30 @@ Timeline (8 events, 0.5s total):
 - V0.9.4 全部新增 / 修改在 `planner/` + `cli/`
 - EventBus 是 planner 内部组件，不污染 Router 抽象
 
-### 决策 10：schema_version 升级
+### 决策 10：schema_version 维持 "1"（不升级到 "2"）
 
-- `metadata.schema_version` 从 `"1"` → `"2"`
-- 升级原因：metadata 加入 `aggregate_metrics`（Plan 层 metrics 聚合）+ `step.execution_metrics` 字段
-- 老 consumer 读到 `"1"` 时应回退到「无 metrics」模式（不抛错）
+**ChatGPT 关键建议**：
+
+> **Schema Version 只因为 JSON Contract 变化而变化。不要因为新增字段就升级。**
+> 例如：如果只是新增 Optional 字段，Schema 未破坏，我不会升级。
+> 我建议：只有 Consumer 必须修改，才 Schema Version++。否则 Version Inflation。
+>
+> Postel's Law：Be conservative in what you send, be liberal in what you accept.
+> Consumer 永远容忍缺字段（latency_ms = None 而不是抛异常）。
+
+**V0.9.4 决策**：
+- `metadata.schema_version` 维持 `"1"`（不升级）
+- V0.9.4 新增字段（`aggregate_metrics` / `step.execution_metrics` / `events`）都是 **Optional**
+- 老 consumer 缺字段时静默忽略
+- V0.9.4 文档强化 Postel's Law 兼容性原则
+
+**未来升级触发条件**（V0.9.5+）：
+- 字段类型变化（如 ExecutionMetrics.latency_ms: int → float）
+- 字段语义变化（如 ExecutionMetrics.cost_usd 含义改变）
+- 字段强制化（Optional → Required）
+- **不要**因为新增 Optional 字段就升级
+
+**Decision Reversal**：原 ADR-0017 拟升级 "1" → "2"，按 ChatGPT 建议改回 "1"。
 
 ## 架构
 
@@ -320,7 +415,7 @@ Timeline (8 events, 0.5s total):
 7. `cli/trace.py`（新增）— `ai-hub trace` 命令
 8. `cli/main.py`（修改）— 注册 trace 命令
 9. `cli/plan.py`（修改）— 注入 EventBus + InMemoryTraceCollector 单例
-10. `metadata.schema_version = "2"`（升级）
+10. `metadata.schema_version = "1"`（维持，不升级 — ChatGPT 强建议）
 11. `planner/__init__.py`（修改）— 导出新类型
 12. 完整测试
 
@@ -369,10 +464,40 @@ Timeline (8 events, 0.5s total):
 
 ## 后续路线
 
-- **V0.9.5**：ExecutionStore（SQLite 持久化）+ 异步 EventBus
+- **V0.9.5**：ExecutionStore（SQLite 单文件持久化，单进程） + 异步 EventBus
 - **V0.9.6**：token / cost 自动采集（与 Provider 配合）
-- **V0.10**：Workflow Runtime（条件分支 / 重试 / 暂停恢复 / DAG），内部仍用 EventBus 收集 trace
+- **V0.10**：Workflow Runtime（按 ChatGPT 优先级）
+  1. **Dependency**（依赖图 — DAG 是一种表示）
+  2. **Conditional**（条件分支）
+  3. **Retry**（per-step max_retries）
+  4. **Checkpoint**（检查点）
+  5. **Resume**（恢复）
+- **V0.11+**：Multi-process EventBus（File Lock / Retry / Busy Timeout）— 仅在真实 Daemon 需求时
 
 ---
 
-> 等待 ChatGPT 审核。建议提供完整 ADR + V0.9.3 review 上下文。
+## 审核结论
+
+> ChatGPT：10.0/10 APPROVED（Proposed → Accepted）
+>
+> 原文：*「我给 10.0/10（作为 ADR，而不是代码实现）。原因很简单：它没有急着做 ExecutionStore，而是先把 Execution 的模型定义出来。这是 V0.9.x 最重要的一次架构决策。」*
+>
+> 完整审核：[V0.9.4 ADR ChatGPT Review](../reviews/V0.9.4-adr-chatgpt-review.md)
+
+**采纳的 8 项建议**：
+1. ✅ ExecutionEvent.event_id 字段（UUID 唯一键）
+2. ✅ EventBus.subscribe(event_type, callback) 接口预留（V0.9.4 内部暂不过滤）
+3. ✅ ExecutionMetrics 只含可测量字段（latency / token / cost / retry）
+4. ✅ ExecutionRecord 概念预留，V0.9.4 不实现完整类
+5. ✅ TraceCollector.has(plan_id) + inspect 显示 "Trace: Available/No Trace"
+6. ✅ trace 命令强调 Timeline（含真实时间戳 + 相对时间）
+7. ✅ schema_version 维持 "1"（Postel's Law — 不为新增 Optional 字段升级）
+8. ✅ Provider latency 显式记录 + Step/Plan latency 派生
+
+**未采纳的延后**：
+- ⏸ SQLite 跨进程同步（V0.9.5 仍单进程；V0.11+ 再做）
+- ⏸ V0.10 Workflow Runtime 完整实现（V0.9.4 后下一里程碑）
+
+---
+
+> V0.9.4 已 Accepted，可进入实施阶段。
