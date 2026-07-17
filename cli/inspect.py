@@ -8,6 +8,7 @@
 #   ai-hub inspect --list --json       JSON 列表
 #
 # 数据来源：进程内 PlanStore（环形缓冲 N=10，V0.9.3）。
+# ⚠️ **Current Process Only**（ChatGPT 审核建议）：不持久化，进程退出后丢失。
 # 跨进程持久化由 V0.9.4+ Execution History 引入。
 #
 # 与 explain-route 的职责区分：
@@ -95,7 +96,7 @@ def _list_recent(json_output: bool) -> None:
         return
 
     # 人类可读
-    print("AI Hub Inspect — v0.9.3")
+    print("AI Hub Inspect — v0.9.3 (Current Process Only)")
     print()
     print(f"Recent Plans: {len(plans)}/{store.max_size}")
     print()
@@ -111,7 +112,7 @@ def _print_plan_human(plan) -> None:
     """人类可读 Plan 详情。"""
     from planner.plan import Plan
 
-    print("AI Hub Inspect — v0.9.3")
+    print("AI Hub Inspect — v0.9.3 (Current Process Only)")
     print()
     print(f"Plan: {plan.plan_id}")
     print(f"Task: {plan.task_id}")

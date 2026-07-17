@@ -20,19 +20,27 @@ from collections import OrderedDict
 from planner.plan import Plan
 
 
+# V0.9.3 默认 PlanStore 容量（环形缓冲）
+# 避免魔法数字散落（ChatGPT 审核建议），后续可由 CLI flag / Config 覆盖
+DEFAULT_STORE_SIZE: int = 10
+
+
 class PlanStore:
     """进程内 Plan 存储（环形缓冲，最多 max_size 个）。
 
     V0.9.3 单进程单线程使用，不引入锁。
     V0.9.4+ 持久化或并发场景时，本类将由子类化或替换为持久化实现。
 
+    注意：PlanStore 是 **运行时缓存**（ChatGPT 审核建议），不保证进程退出后仍存在。
+    跨进程持久化由 V0.9.4+ Execution History 引入。
+
     API Stability: Experimental
     """
 
-    def __init__(self, max_size: int = 10):
+    def __init__(self, max_size: int = DEFAULT_STORE_SIZE):
         """
         Args:
-            max_size: 环形缓冲最大容量（默认 10）
+            max_size: 环形缓冲最大容量（默认 DEFAULT_STORE_SIZE=10）
         """
         if max_size <= 0:
             raise ValueError(f"max_size must be > 0, got {max_size}")

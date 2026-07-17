@@ -30,14 +30,15 @@ from core.quota import QuotaManager
 from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from planner.executor import PlanExecutor
-from planner.plan_store import PlanStore
+from planner.plan_store import PlanStore, DEFAULT_STORE_SIZE
 from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
 
 
 # V0.9.3: 进程内 PlanStore（环形缓冲 N=10），供 cmd_inspect 查询
 # 单进程单线程，CLI 不暴露调整接口
-_PLAN_STORE = PlanStore(max_size=10)
+# 运行时缓存，不持久化（ChatGPT 审核建议明示）
+_PLAN_STORE = PlanStore(max_size=DEFAULT_STORE_SIZE)
 
 
 def get_plan_store() -> PlanStore:
