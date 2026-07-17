@@ -1,10 +1,11 @@
 # ADR-0018: V0.9.5 — SQLiteExecutionStore（Execution Event 持久化）
 
-- **状态**: Proposed
+- **状态**: Accepted（ChatGPT 外部审核 10.0/10 APPROVED）
 - **日期**: 2026-07-17
 - **里程碑**: V0.9.5
 - **关联**: ADR-0008（Core Freeze）、ADR-0017（Execution Event + Metrics + Trace）
 - **API Stability**: Experimental
+- **ChatGPT 审核**: 10.0/10 APPROVED（2026-07-17）
 - **前序审核**: [V0.9.4 代码 ChatGPT Review](../reviews/V0.9.4-code-chatgpt-review.md) — 10.0/10 APPROVED
 
 ## ⚠️ 核心设计原则（继承 ADR-0017）
@@ -122,28 +123,41 @@ CREATE INDEX IF NOT EXISTS idx_events_timestamp ON execution_events(timestamp);
 - 避免双写一致性问题（Plan 在 PlanStore，events 在 SQLite）
 - ChatGPT D5 已明确：PlanStore 和 ExecutionStore 职责不同，不统一
 
-### 决策 3：DB 文件位置
+### 决策 3：DB 文件位置（ChatGPT 建议调整：workspace 优先）
 
-**默认路径**：`~/.ai-hub/execution.db`
+**ChatGPT 反馈**：
 
-**可配置**：环境变量 `AI_HUB_DB_PATH` 覆盖默认路径。
+> 我不太赞同 ~/.ai-hub/execution.db 作为默认。
+> 我更倾向 Runtime 应该有 Workspace。
+> `project/.ai-hub/execution.db`
+> 原因：否则 Project A/B/C 全部混在一起，History 会越来越难解释。
+
+**优先级**（ChatGPT 建议）：
 
 ```python
-DEFAULT_DB_PATH = Path.home() / ".ai-hub" / "execution.db"
-
 def _resolve_db_path(custom: str | None = None) -> Path:
+    # 1. 显式参数
     if custom:
         return Path(custom)
+    # 2. 环境变量
     env = os.environ.get("AI_HUB_DB_PATH")
     if env:
         return Path(env)
-    return DEFAULT_DB_PATH
+    # 3. 当前 workspace（cwd）
+    workspace_db = Path.cwd() / ".ai-hub" / "execution.db"
+    # 4. HOME 兜底
+    return workspace_db  # V0.9.5: workspace 优先，不 fallback HOME
 ```
 
-**为什么放用户目录？**
-- 跨项目共享（用户可能在多个项目用 ai-hub）
-- 不污染项目目录（项目 .gitignore 不用改）
-- 与 PlanStore（进程内存）解耦
+**V0.9.5 决策**：workspace 优先（`./.ai-hub/execution.db`），环境变量可覆盖。
+
+**为什么 workspace 优先？**（ChatGPT 理由）
+- 不同项目的 History 不混在一起
+- 项目级数据可见性好（用户能看到 `.ai-hub/` 目录）
+- 与 git repo 对齐（项目隔离）
+- `.ai-hub/` 加入 `.gitignore` 即可（不污染 git）
+
+**HOME 兜底**：V0.9.5 不做 fallback。如果 workspace 不可写（权限问题），报错并提示用 `AI_HUB_DB_PATH` 指定。
 
 ### 决策 4：WAL mode + 同步 INSERT
 
@@ -184,34 +198,9 @@ ChatGPT V0.9.4 代码审核 Q3 建议："Event handlers should be lightweight an
 - 单次 INSERT >10ms
 - 此时改为后台队列 + 批量 INSERT
 
-### 决策 5：事务边界
+### 决策 5：长连接 + Context Manager + INSERT 语义（ChatGPT 建议调整）
 
-**每 event 一个 INSERT**（V0.9.5 简单实现）：
-
-```python
-def handle(self, event: ExecutionEvent) -> None:
-    conn = sqlite3.connect(self._db_path, timeout=5.0)
-    try:
-        conn.execute(
-            "INSERT OR REPLACE INTO execution_events (...) VALUES (...)",
-            (event.event_id, event.type, event.plan_id, ...)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-```
-
-**为什么不用连接池 / 长连接？**
-- V0.9.5 单进程 CLI，每 plan 8-12 events，连接开销可接受
-- 长连接需要管理生命周期（进程退出时关闭）
-- V1.0+ 后台队列时再引入长连接 + 批量 commit
-
-**为什么 INSERT OR REPLACE？**
-- event_id 是 UUID，理论上不重复
-- OR REPLACE 作为防御性编程（万一重复 event_id 不崩溃）
-- 语义上：相同 event_id 的 event 是同一个事件（immutable 约定）
-
-**优化选项（V0.9.5 可选）**：用长连接 + context manager：
+**长连接**（ChatGPT 赞同）：
 
 ```python
 def __init__(self, db_path):
@@ -219,14 +208,63 @@ def __init__(self, db_path):
     self._init_db()
 
 def handle(self, event):
-    self._conn.execute("INSERT OR REPLACE ...", ...)
+    self._conn.execute("INSERT INTO execution_events (...) VALUES (...)", ...)
     self._conn.commit()
 
 def close(self):
     self._conn.close()
 ```
 
-**ADR 倾向**：长连接版本（性能更好，且 close() 明确管理生命周期）。
+**Context Manager**（ChatGPT 建议补充）：
+
+```python
+def __enter__(self):
+    return self
+
+def __exit__(self, *exc):
+    self.close()
+```
+
+使用方式：
+```python
+with SQLiteExecutionStore(db_path) as store:
+    bus.subscribe(None, store.handle)
+    # ...
+```
+
+**INSERT 语义**（ChatGPT 关键调整）：
+
+> 不要 REPLACE。如果 ExecutionEvent 是 Immutable，那么 INSERT OR IGNORE 更符合语义。
+> 甚至我更倾向普通 INSERT。如果违反 PRIMARY KEY，直接记录 Warning。
+> 因为 UUID 重复本来就是异常。REPLACE 反而掩盖 Bug。
+
+**V0.9.5 决策**：普通 INSERT + 重复时 Warning log。
+
+```python
+import logging
+_log = logging.getLogger(__name__)
+
+def handle(self, event: ExecutionEvent) -> None:
+    try:
+        self._conn.execute(
+            "INSERT INTO execution_events (event_id, type, plan_id, ...) VALUES (...)",
+            (event.event_id, event.type, event.plan_id, ...)
+        )
+        self._conn.commit()
+    except sqlite3.IntegrityError:
+        # PRIMARY KEY 违反 = event_id 重复（UUID 理论不重复，重复即异常）
+        _log.warning("Duplicate event_id %s ignored (event immutable)", event.event_id)
+```
+
+**语义排序**（ChatGPT）：
+1. 普通 INSERT ★★★★★（重复 = 异常，记录 Warning）
+2. INSERT OR IGNORE ★★★★☆（次选）
+3. INSERT OR REPLACE ★（掩盖 Bug，不用）
+
+**为什么不用每 event 新连接？**
+- 连接开销大（V0.9.5 每 plan 8-12 events）
+- SQLite 官方推荐复用连接
+- 长连接 + close() / Context Manager 管理生命周期更清晰
 
 ### 决策 6：ai-hub history 命令
 
@@ -442,7 +480,7 @@ ai-hub history --cleanup --keep <N>         只保留最近 N 条
 - `PlanExecutor.__init__` 签名不变（event_bus 注入不变）
 - `metadata.schema_version` 维持 "1"
 - 新增 `ai-hub history` 命令（不影响现有命令）
-- 新增 `~/.ai-hub/execution.db`（首次运行自动创建）
+- 新增 `.ai-hub/execution.db`（workspace 级，首次运行自动创建）
 
 ## 风险
 
@@ -451,9 +489,53 @@ ai-hub history --cleanup --keep <N>         只保留最近 N 条
 | DB 文件损坏 | WAL mode + synchronous=NORMAL（崩溃可恢复）|
 | DB 文件增长 | V0.9.5 不限制；V0.9.6+ 加 --cleanup |
 | 同步 INSERT 阻塞 | V0.9.5 <1ms per INSERT（可接受）；V1.0+ 后台队列 |
-| DB 文件权限 | `~/.ai-hub/` 目录用户可写（默认） |
+| DB 文件权限 | workspace 目录用户可写（默认 `.ai-hub/`） |
 | 多进程同时写 | V0.9.5 单进程；V0.11+ 再解决（busy_timeout=5.0 已设） |
 | SQLite 不可用 | Python 标准库 sqlite3，无外部依赖 |
+
+## Storage Failure Policy（ChatGPT 建议补充）
+
+**ChatGPT 建议**：
+
+> 如果 SQLite 出现 Disk Full / Permission Denied / Busy / Corrupted，怎么办？
+> 我建议明确：**Storage Failure ≠ Execution Failure**。
+> Runtime 应该继续。最多 Log。不要因为 History 失败导致 Plan 失败。
+
+**V0.9.5 实施原则**：
+
+```
+Storage Failure（SQLite 写失败）
+    ↓
+≠ Execution Failure（Plan 不受影响）
+    ↓
+handler 内 try/except 捕获
+    ↓
+_log.error("SQLite write failed: %s", exc)
+    ↓
+Runtime 继续执行 Plan
+```
+
+**handler 异常隔离**：
+
+```python
+def handle(self, event: ExecutionEvent) -> None:
+    try:
+        self._conn.execute(...)
+        self._conn.commit()
+    except sqlite3.IntegrityError:
+        _log.warning("Duplicate event_id %s ignored", event.event_id)
+    except sqlite3.DatabaseError as exc:
+        # Disk Full / Permission / Busy / Corrupted
+        _log.error("SQLite write failed (event=%s): %s", event.event_id, exc)
+        # 不 re-raise，Runtime 继续
+```
+
+**注意**：EventBus.emit() 已有异常隔离（V0.9.4 实现），handler 抛异常不会影响其他 consumer。但 SQLiteExecutionStore.handle 内部也应自行捕获，避免 EventBus 日志泛滥。
+
+**这条原则的意义**：
+- History 是"锦上添花"，不是"执行必需"
+- 用户 Plan 执行成功比 History 记录成功更重要
+- 符合 "Single Source of Execution Truth"：Event 先 emit，Consumer 各自处理失败
 
 ## 确认问题（发 ChatGPT 审核）
 
@@ -466,14 +548,51 @@ ai-hub history --cleanup --keep <N>         只保留最近 N 条
 7. **list_plans 查询**：从 events 表派生 plan 列表（GROUP BY plan_id）vs 维护单独的 plans 索引表？
 8. **V0.9.5 范围克制**：不做 cleanup / TTL / 后台队列 / token cost，只做持久化 + history 查询。是否太保守或正好？
 
-## 后续路线
+## 后续路线（ChatGPT 建议的 V0.9.x 演进）
 
-- **V0.9.6**：token / cost 自动采集（Provider 返回 server_metrics → Runtime 转 ExecutionMetrics，Provider 不接触 EventBus）+ history --cleanup
-- **V0.10**：Workflow Runtime（Dependency → Conditional → Retry → Checkpoint → Resume）
-- **V1.0**：后台队列 + 批量 INSERT（并发场景）+ Subscription Handle（token 模式）
+ChatGPT V0.9.5 ADR 审核建议的演进顺序：
+
+```
+V0.9.5  SQLite Event Store（本版本）
+  ↓
+V0.9.6  Provider Metrics（Token / Cost — Provider 返回 server_metrics → Runtime 转）
+  ↓
+V0.9.7  Statistics（success rate / avg latency — 全部由 Event 派生）
+  ↓
+V1.0    Workflow Runtime（Dependency → Conditional → Retry → Checkpoint → Resume）
+```
+
+> ChatGPT：「不要急着进入 Workflow，把 Runtime 的观测能力打磨完整，会让 V1.0 更稳。」
+
+**未来建议**（ChatGPT）：
+- 所有 Query 围绕 Event（`query_events(...)`），不要 `get_plan(...)`
+- History / Timeline / Statistics 全部由 Event 派生
+- ExecutionStore 始终只是 Event Store，不是 Workflow Store
 
 ---
 
 ## 审核状态
 
-> 待 ChatGPT 外部审核（Proposed）
+> ChatGPT：10.0/10 APPROVED（Proposed → Accepted）
+>
+> 原文：*「ADR-0018 最大的价值不在于"把数据写进 SQLite"，而在于保持了事件驱动架构的一致性：ExecutionEvent 仍然是唯一的执行事实来源，SQLiteExecutionStore 只是一个订阅者，而不是 Runtime 的核心组件。」*
+>
+> 完整审核：[V0.9.5 ADR ChatGPT Review](../reviews/V0.9.5-adr-chatgpt-review.md)
+
+**采纳的调整**：
+1. ✅ DB 路径改为 workspace 优先（`.ai-hub/execution.db`，非 `~/.ai-hub/`）
+2. ✅ INSERT 语义改为普通 INSERT + 重复 Warning（非 OR REPLACE，符合 immutable 原则）
+3. ✅ Context Manager 支持（`__enter__` / `__exit__`）
+4. ✅ Storage Failure Policy（Storage Failure ≠ Execution Failure）
+
+**确认 OK 的决策**：
+- ✅ 单表设计（不提前规范化）
+- ✅ 同步 INSERT（V0.9.x 单进程 CLI 场景）
+- ✅ 长连接
+- ✅ history vs trace 命名清晰
+- ✅ GROUP BY 派生 plan 列表
+- ✅ 范围克制（只做持久化 + 查询）
+
+---
+
+> V0.9.5 ADR 已 Accepted，可进入实施阶段。
