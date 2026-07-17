@@ -1,10 +1,11 @@
 # AI Hub — Runtime Contract
 
-> **版本**：v1.0.0（草案，V0.9.7 收官后启动）
-> **状态**：Draft（待 ChatGPT 外部审核）
+> **版本**：v1.0.0（Accepted，V0.9.7 收官后启动）
+> **状态**：Accepted（ChatGPT 外部审核 10.0/10 FINAL APPROVED）
 > **日期**：2026-07-17
 > **重要性**：与 [PROVIDER_SPEC.md](PROVIDER_SPEC.md) 同级
 > **触发建议**：[V0.9.7 代码 ChatGPT Review](reviews/V0.9.7-code-chatgpt-review.md) — ChatGPT 强烈建议在 V1.0 Coding 之前完成
+> **本版审核**：[Runtime Contract ChatGPT Review](reviews/runtime-contract-chatgpt-review.md) — 10.0/10 FINAL APPROVED
 
 ## 目的
 
@@ -163,7 +164,19 @@ ExecutionEvent.data
 
 - 修改 event 任何字段
 - 调用其他 Consumer 的方法
-- 抛异常到 EventBus（用 try/except 内化）
+- 让异常传播到 EventBus（必须内部消化，**ChatGPT Q2 调整**）
+
+> **ChatGPT Q2 措辞**：
+> Consumer MUST internally handle its own failures and MUST NOT allow exceptions to escape EventBus dispatch.
+>
+> 不是"Consumer 永远不会失败"，而是"失败必须内部消化"：
+> ```
+> EventBus
+>     |
+>     +--- Consumer A failed (内部消化)
+>     |
+>     +--- Consumer B still executes (继续)
+> ```
 
 **标准 Consumer**：
 
@@ -174,11 +187,11 @@ ExecutionEvent.data
 
 ## 4. Query Contract
 
-### 4.1 query_events() 是唯一查询入口
+### 4.1 query_events() 是 canonical query interface
 
 **保证**：
 
-- `SQLiteExecutionStore.query_events(...)` 是所有 CLI（history / stats / future）的基础
+- `SQLiteExecutionStore.query_events(...)` 是 **canonical query interface**（ChatGPT Q3 调整）
 - 6 个 Optional 过滤参数 + limit
 - provider 参数支持 `str | list[str] | None`（V0.9.7 ChatGPT Q7）
 - 返回 `list[ExecutionEvent]`（按 timestamp 升序）
@@ -188,6 +201,11 @@ ExecutionEvent.data
 - `get_events(plan_id)` ≡ `query_events(plan_id=plan_id)`
 - `list_plans(limit)` 内部基于 `query_events(event_type="plan_started")` 派生
 - `has(plan_id)` 保留单条 SQL EXISTS
+
+> **ChatGPT Q3 措辞调整**：
+> 不要写"唯一查询入口"（get_events / list_plans / has 仍存在）。
+> 改为 `query_events()` is the **canonical query interface**。
+> Other methods are **Convenience APIs**.
 
 ### 4.2 SQL 安全
 
@@ -235,16 +253,36 @@ ExecutionEvent.data
 
 ### 6.2 Analytics Failure ≠ Storage Failure
 
-**保证**（V0.9.7）：
+**保证**（V0.9.7 + V1.0 强化）：
 
 - `StatisticsCollector.compute()` 解析失败时 skip 该条（不抛异常）
 - 时间戳损坏 → warning + 跳过该条 latency
 - 整个统计不会因单条 event 失败而崩溃
 
-**V1.0 强化**（ChatGPT V0.9.7 Q6 建议）：
+**V1.0 强化**（ChatGPT V0.9.7 Q6 + Runtime Contract Q4 建议）：
 
 - StatisticsCollector 解析失败时显式 warning
 - 跳过该条，不影响整体
+
+**Consumer failure 统一日志规范**（ChatGPT Q4 强化）：
+
+Consumer failures SHOULD include:
+- consumer name
+- exception type
+- exception message
+
+and continue processing remaining events.
+
+**示例**：
+
+```
+StatisticsCollector skipped event
+  event_id=...
+  reason=Invalid timestamp
+  exception=ValueError
+```
+
+**原因**：Dashboard / Exporter / WebSocket / Metrics / Statistics 都应统一日志风格。
 
 ## 7. Capability Routing 不变量
 
@@ -267,7 +305,10 @@ ExecutionEvent.data
 **V0.9.6 MetricsRouter 临时层**：
 
 - 解决 Core Freeze 下"无法在 Router.execute() 加 server_metrics"
-- V2.0 退出路径：BridgeResult raw extension 或 ExecutionPipeline Decorator
+- **MetricsRouter is transitional**（ChatGPT Q5 措辞调整）
+- **Server metrics extraction should migrate into future runtime infrastructure**
+- 不写死具体实现（Pipeline / Middleware / Interceptor / Execution Runtime 都是候选）
+- V2.0 退出时由具体 V1.0 实施决定
 
 ## 9. 版本演进
 
@@ -290,8 +331,20 @@ ExecutionEvent.data
 - ❌ Pricing 估算准确度（V0.9.6 chatgpt 已确认是估算）
 - ❌ 持久化 Storage 实现（SQLite / Future）
 - ❌ Dashboard / Web UI（V1.0+ 推迟）
+- ❌ **Business State**（如 Plan status / Task state / Course progress）— 属业务 Contract，不是 Runtime（ChatGPT Q6 补充）
 
 ## 11. 与其他文档的关系
+
+```
+ARCHITECTURE.md（V1.0 启动时新增，ChatGPT Q7 建议）
+├── Architecture Overview
+├── Component Diagram
+└── Document Map
+    ├── Runtime Contract（本文件）
+    ├── PROVIDER_SPEC.md
+    ├── Capability Contract（V1.0+ 评估）
+    └── Workflow Contract（V1.0+ 启动）
+```
 
 ```
 PROVIDER_SPEC.md       Runtime Contract
@@ -307,6 +360,10 @@ Provider 实现         Runtime 行为
 
 ## 12. 后续
 
-- 本 Contract 草案完成后，发 ChatGPT 外部审核
-- 通过后作为 V1.0 Workflow Runtime 的开发前置
+- 本 Contract 已通过 ChatGPT 外部审核（10.0/10 FINAL APPROVED）
+- V1.0 启动前置：写 `docs/ARCHITECTURE.md`（ChatGPT Q7 建议）
+- V1.0 按阶段写 ADR（不一口气写完整 Workflow）：
+  - ADR-0021 ExecutionPipeline → 编码 → 冻结
+  - ADR-0022 Retry → 编码 → 冻结
+  - ADR-0023 Checkpoint → 编码 → 冻结
 - V1.0+ 任何 Runtime 行为变更需更新本 Contract
