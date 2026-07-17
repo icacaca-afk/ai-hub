@@ -6,12 +6,12 @@
 #
 # ADR-0013: V0.9.0 只做顺序执行 + 简单聚合。DAG/并行留 V0.10+。
 #
-# 聚合规则（V0.9.1 分层 metadata，ADR-0014）：
+# 聚合规则（V0.9.1 分层 metadata，ADR-0014；V0.9.3 加 schema_version，ADR-0016）：
 #   - 全 success → success
 #   - 全 failed → failed
 #   - 混合 → partial
 #   - outputs 顺序拼接（带 step header），artifacts 合并去重
-#   - metadata 分层：顶层 plan_id/task_id；plan.{status,steps,success,failed}；runtime.{planner,router}
+#   - metadata 分层：顶层 plan_id/task_id + schema_version；plan.{status,steps,success,failed}；runtime.{planner,router}
 #
 # API Stability: Experimental
 
@@ -44,9 +44,21 @@ class PlanExecutor:
     API Stability: Experimental
     """
 
-    def __init__(self, router: Router, planner: Optional[Planner] = None):
+    def __init__(
+        self,
+        router: Router,
+        planner: Optional[Planner] = None,
+        plan_store: Optional[PlanStore] = None,
+    ):
+        """
+        Args:
+            router: Router 实例（与 Planner 共享）
+            planner: Planner 实例（默认 RuleBasedPlanner）
+            plan_store: PlanStore 实例（V0.9.3 可选，传入后执行完自动 save）
+        """
         self.router = router
         self.planner = planner or RuleBasedPlanner()
+        self.plan_store = plan_store
         self.last_plan: Optional[Plan] = None
 
     def execute(self, task: Task) -> Result:
@@ -72,6 +84,10 @@ class PlanExecutor:
             result = self.router.execute(sub_task)
             step.execution_result = result
             step.status = "success" if result.is_success else "failed"
+
+        # V0.9.3: 执行完后持久化到 plan_store（如果有）
+        if self.plan_store is not None:
+            self.plan_store.save(plan)
 
         return self._aggregate(plan, task)
 
@@ -131,7 +147,7 @@ class PlanExecutor:
             error="; ".join(errors) if errors else None,
             artifacts=combined_artifacts,
             metadata={
-                # 顶层冻结：仅 plan_id / task_id，不允许新增顶层字段（ADR-0014）
+                # 顶层稳定标识：plan_id / task_id（ADR-0014 冻结）
                 "plan_id": plan.plan_id,
                 "task_id": original_task.task_id,
                 # plan 子键：计划统计（explain-plan / Dashboard 直接消费）
@@ -146,5 +162,8 @@ class PlanExecutor:
                     "planner": type(self.planner).__name__,
                     "router": type(self.router).__name__,
                 },
+                # schema_version: V0.9.3 引入（ADR-0016），作为元数据管理字段
+                # 允许在顶层（类比 HTTP Content-Type），不破坏 ADR-0014 业务字段冻结
+                "schema_version": "1",
             },
         )

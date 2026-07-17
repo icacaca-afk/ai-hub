@@ -15,6 +15,7 @@ from planner.base import Planner
 from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
 from planner.plan_validator import PlanValidator
+from planner.plan_store import PlanStore
 from planner.executor import PlanExecutor
 
 __all__ = [
@@ -24,5 +25,6 @@ __all__ = [
     "RuleBasedPlanner",
     "LLMPlanner",
     "PlanValidator",
+    "PlanStore",
     "PlanExecutor",
 ]

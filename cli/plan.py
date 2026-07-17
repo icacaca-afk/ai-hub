@@ -1,17 +1,24 @@
 # AI Hub — CLI plan
 # V0.9.1: Planner CLI 入口
+# V0.9.2: 新增 --llm 标志
+# V0.9.3: --json 真正实现（结构化输出）+ PlanStore 集成
 #
 # 用法：
-#   ai-hub plan "<复合任务描述>"
-#   ai-hub plan "<task>" --json   (V0.9.3 实现，当前打印提示并 exit 0)
+#   ai-hub plan "<复合任务描述>"                    人类可读输出
+#   ai-hub plan "<task>" --llm                     使用 LLMPlanner 语义分解
+#   ai-hub plan "<task>" --json                    输出结构化 JSON（V0.9.3）
 #
 # 链路：Task → Planner → PlanExecutor → Router → Aggregate Result
 # CLI 只消费 Result（output/artifacts/metadata），不访问 Planner 内部对象（ADR-0014）。
+#
+# V0.9.3 新增：执行完的 Plan 自动存入进程内 PlanStore（环形缓冲 N=10），
+# 可用 `ai-hub inspect <plan_id>` 查看详情。
 #
 # API Stability: Experimental
 
 from __future__ import annotations
 
+import json
 import sys
 
 if sys.platform == "win32":
@@ -23,8 +30,19 @@ from core.quota import QuotaManager
 from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from planner.executor import PlanExecutor
+from planner.plan_store import PlanStore
 from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
+
+
+# V0.9.3: 进程内 PlanStore（环形缓冲 N=10），供 cmd_inspect 查询
+# 单进程单线程，CLI 不暴露调整接口
+_PLAN_STORE = PlanStore(max_size=10)
+
+
+def get_plan_store() -> PlanStore:
+    """暴露 PlanStore 给 cli/inspect.py 使用（V0.9.3）。"""
+    return _PLAN_STORE
 
 
 def _build_registry():
@@ -62,7 +80,7 @@ def cmd_plan(args: list[str]) -> None:
     用法：
       ai-hub plan "<task>"          人类可读输出（RuleBasedPlanner）
       ai-hub plan "<task>" --llm    使用 LLMPlanner 语义分解（V0.9.2）
-      ai-hub plan "<task>" --json   V0.9.3 实现（当前 exit 0 + 提示）
+      ai-hub plan "<task>" --json   结构化 JSON 输出（V0.9.3）
     """
     if not args:
         print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
@@ -74,11 +92,6 @@ def cmd_plan(args: list[str]) -> None:
     if not task_args:
         print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
         sys.exit(1)
-
-    # --json 占位：未实现 ≠ 错误，exit 0（ADR-0014）
-    if json_output:
-        print("JSON output will be available in V0.9.3 with explain-plan")
-        sys.exit(0)
 
     text = " ".join(task_args)
     if not text.strip():
@@ -97,15 +110,53 @@ def cmd_plan(args: list[str]) -> None:
     else:
         planner = RuleBasedPlanner()
 
-    executor = PlanExecutor(router=router, planner=planner)
+    # V0.9.3: 注入 PlanStore（执行完自动 save，inspect 可查）
+    executor = PlanExecutor(router=router, planner=planner, plan_store=_PLAN_STORE)
 
     task = Task.from_text(text)
 
     # 执行（PlanExecutor 内部完成分解 + 路由 + 聚合）
     result = executor.execute(task)
 
-    # ── 输出（只消费 Result，不访问 executor.last_plan） ──
-    print("AI Hub Plan — v0.9.1")
+    # V0.9.3: --json 真正实现
+    if json_output:
+        _print_json_output(task, result)
+        if result.status == "failed":
+            sys.exit(1)
+        return
+
+    # 人类可读输出（V0.9.1 不变）
+    _print_human_output(text, result)
+
+    if result.error and result.status == "failed":
+        sys.exit(1)
+
+
+def _print_json_output(task: Task, result) -> None:
+    """V0.9.3: 输出结构化 JSON（ADR-0016 schema）。"""
+    # 安全序列化：Result.metadata 是 dict，Result.to_dict() 处理嵌套
+    payload = {
+        "version": "0.9.3",
+        "task": {
+            "text": task.content,
+            "task_id": task.task_id,
+        },
+        "plan": {
+            "plan_id": result.metadata.get("plan_id", ""),
+            "task_id": result.metadata.get("task_id", task.task_id),
+            "status": result.metadata.get("plan", {}).get("status", "unknown"),
+            "output": result.output,
+            "artifacts": result.artifacts,
+            "error": result.error,
+            "metadata": result.metadata,
+        },
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _print_human_output(text: str, result) -> None:
+    """V0.9.3 人类可读输出（保持 V0.9.1 格式，版本号升级）。"""
+    print("AI Hub Plan — v0.9.3")
     print()
     print("Task:")
     print(f"  {text}")
@@ -135,7 +186,13 @@ def cmd_plan(args: list[str]) -> None:
         print(f"    ({step_failed} step(s) failed)")
     print()
 
-    # Output（已含 [Step i: ...] header，由 PlanExecutor 聚合）
+    # schema_version
+    schema_version = result.metadata.get("schema_version", "?")
+    print(f"Schema Version:")
+    print(f"  {schema_version}")
+    print()
+
+    # Output
     print("Output:")
     print(result.output)
     print()
@@ -150,8 +207,6 @@ def cmd_plan(args: list[str]) -> None:
     # Error
     if result.error:
         print(f"Error: {result.error}", file=sys.stderr)
-        if result.status == "failed":
-            sys.exit(1)
 
 
 if __name__ == "__main__":

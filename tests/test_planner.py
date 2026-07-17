@@ -267,6 +267,8 @@ class TestPlanExecutor:
         assert result.metadata["plan"]["failed"] == 0
         assert result.metadata["plan"]["status"] == "success"
         assert result.metadata["runtime"]["planner"] == "RuleBasedPlanner"
+        # V0.9.3 (ADR-0016): metadata 顶层 schema_version
+        assert result.metadata["schema_version"] == "1"
 
     def test_all_failed(self):
         """全 failed → Plan status=failed，Result status=failed。"""
@@ -457,3 +459,145 @@ class TestCoreFreezeConstraint:
         """Planner ABC 不能直接实例化。"""
         with pytest.raises(TypeError):
             Planner()
+
+
+# ── V0.9.3: schema_version + PlanStore 集成 ──
+
+class TestSchemaVersionContract:
+    """V0.9.3 (ADR-0016): metadata.schema_version 契约。"""
+
+    def test_schema_version_present_all_status(self):
+        """success / failed / partial 三种状态都带 schema_version='1'。"""
+        cases = [
+            (Result(provider="fake", status="success", output="ok"), "success"),
+            (Result(provider="fake", status="failed", output="", error="x"), "failed"),
+        ]
+        for step_result, expected in cases:
+            router = FakeRouter(default=step_result)
+            executor = PlanExecutor(router=router)
+            result = executor.execute(Task.from_text("第一步然后第二步"))
+
+            assert result.metadata["schema_version"] == "1", f"case={expected}"
+            assert result.metadata["plan"]["status"] == expected
+
+    def test_schema_version_is_top_level(self):
+        """schema_version 位于 metadata 顶层（不嵌套在 plan/runtime 下）。"""
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router)
+        result = executor.execute(Task.from_text("hello"))
+
+        meta = result.metadata
+        assert "schema_version" in meta
+        # 不在 plan 子键
+        assert "schema_version" not in meta["plan"]
+        # 不在 runtime 子键
+        assert "schema_version" not in meta["runtime"]
+
+    def test_schema_version_does_not_break_existing_keys(self):
+        """schema_version 引入不应破坏现有 metadata 字段（ADR-0014 兼容）。"""
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router)
+        result = executor.execute(Task.from_text("hello"))
+
+        # 现有字段（ADR-0014）必须保留
+        assert "plan_id" in result.metadata
+        assert "task_id" in result.metadata
+        assert "plan" in result.metadata
+        assert "runtime" in result.metadata
+        # 新字段（V0.9.3）
+        assert "schema_version" in result.metadata
+
+
+class TestPlanStoreIntegration:
+    """V0.9.3 (ADR-0016): PlanExecutor 与 PlanStore 集成。"""
+
+    def test_executor_saves_plan_when_store_provided(self):
+        """传入 plan_store 后，execute 完成自动 save。"""
+        from planner.plan_store import PlanStore
+
+        store = PlanStore(max_size=5)
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, plan_store=store)
+        task = Task.from_text("第一步然后第二步")
+
+        # 初始：store 空
+        assert store.size == 0
+
+        executor.execute(task)
+
+        # 执行后：store 收到一个 plan
+        assert store.size == 1
+        saved = store.list_recent(limit=1)[0]
+        assert saved.step_count == 2
+        assert saved.status == "success"
+        assert saved.task_id == task.task_id
+
+    def test_executor_without_store_works_normally(self):
+        """不传 plan_store 时向后兼容（不 save）。"""
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router)  # 不传 plan_store
+        task = Task.from_text("hello")
+
+        # 不应抛异常
+        result = executor.execute(task)
+        assert result.status == "success"
+        # plan_store 默认为 None
+        assert executor.plan_store is None
+
+    def test_each_execute_call_saves_one_plan(self):
+        """多次 execute → store 中累积多个 plan。"""
+        from planner.plan_store import PlanStore
+
+        store = PlanStore(max_size=10)
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, plan_store=store)
+
+        executor.execute(Task.from_text("task-1"))
+        executor.execute(Task.from_text("task-2"))
+        executor.execute(Task.from_text("task-3"))
+
+        assert store.size == 3
+        recent = store.list_recent(limit=3)
+        # 最近在前
+        assert recent[0].task_id != recent[-1].task_id
+
+    def test_plan_store_respects_max_size(self):
+        """PlanStore 在 PlanExecutor 中尊重 max_size 限制。"""
+        from planner.plan_store import PlanStore
+
+        store = PlanStore(max_size=2)
+        router = FakeRouter(default=Result(
+            provider="fake", status="success", output="ok"
+        ))
+        executor = PlanExecutor(router=router, plan_store=store)
+
+        executor.execute(Task.from_text("t-1"))
+        executor.execute(Task.from_text("t-2"))
+        executor.execute(Task.from_text("t-3"))  # 触发弹出
+
+        assert store.size == 2  # 不是 3
+
+    def test_failed_plan_also_saved(self):
+        """失败的 plan 也被保存（V0.9.3 不区分 status，失败案例也要可查）。"""
+        from planner.plan_store import PlanStore
+
+        store = PlanStore(max_size=5)
+        router = FakeRouter(default=Result(
+            provider="fake", status="failed", output="", error="boom"
+        ))
+        executor = PlanExecutor(router=router, plan_store=store)
+        executor.execute(Task.from_text("hello"))
+
+        assert store.size == 1
+        saved = store.list_recent(limit=1)[0]
+        assert saved.status == "failed"

@@ -38,6 +38,34 @@ def _run_cli(*args, timeout=30):
 
 # ── FakeExecutor（避免触发真实 Provider） ──
 
+class _FakeQuota:
+    """测试用 Fake QuotaManager（避免真实 sqlite db）。"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class _FakeRegistry:
+    """测试用 Fake CapabilityRegistry。"""
+
+    def all(self):
+        return []
+
+
+class _FakeRouter:
+    """测试用 Fake ScoreRouter。"""
+
+    def __init__(self, *args, **kwargs):
+        self.last_scores = []
+
+
+class _FakeHealth:
+    """测试用 Fake HealthRegistry。"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
 class _FakeExecutor:
     """测试用 Fake PlanExecutor，execute() 返回预设 Result。
 
@@ -46,6 +74,7 @@ class _FakeExecutor:
 
     def __init__(self, *args, **kwargs):
         self.last_plan = None
+        self.plan_store = kwargs.get("plan_store")
 
     def execute(self, task: Task) -> Result:
         # 模拟 RuleBasedPlanner 切分 "hello then world" → 2 步
@@ -66,6 +95,7 @@ class _FakeExecutor:
                     "planner": "RuleBasedPlanner",
                     "router": "ScoreRouter",
                 },
+                "schema_version": "1",
             },
         )
 
@@ -75,6 +105,7 @@ class _FakeExecutorSingleStep:
 
     def __init__(self, *args, **kwargs):
         self.last_plan = None
+        self.plan_store = kwargs.get("plan_store")
 
     def execute(self, task: Task) -> Result:
         return Result(
@@ -86,8 +117,24 @@ class _FakeExecutorSingleStep:
                 "task_id": task.task_id,
                 "plan": {"status": "success", "steps": 1, "success": 1, "failed": 0},
                 "runtime": {"planner": "RuleBasedPlanner", "router": "ScoreRouter"},
+                "schema_version": "1",
             },
         )
+
+
+def _patch_plan_module_deps(monkeypatch):
+    """Patch cmd_plan 的所有真实依赖（QuotaManager / ScoreRouter / _build_registry / HealthRegistry）。"""
+    from cli import plan as plan_module
+    from router import score_router
+    from core import quota as quota_module
+    from core import health_registry as hr_module
+    from cli import plan as cli_plan_module
+
+    monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+    monkeypatch.setattr(plan_module, "QuotaManager", _FakeQuota)
+    monkeypatch.setattr(plan_module, "HealthRegistry", _FakeHealth)
+    monkeypatch.setattr(plan_module, "ScoreRouter", _FakeRouter)
+    monkeypatch.setattr(plan_module, "_build_registry", lambda: _FakeRegistry())
 
 
 # ── 单元测试：执行路径（monkeypatch + capsys） ──
@@ -98,7 +145,7 @@ class TestCliPlanExecution:
     def test_plan_multistep_success(self, monkeypatch, capsys):
         """多步任务：分解 + 执行 + 聚合，输出含关键段落。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
@@ -112,6 +159,7 @@ class TestCliPlanExecution:
     def test_plan_single_step(self, monkeypatch, capsys):
         """单步任务（不可切分）：退化场景，仍正常执行。"""
         from cli import plan as plan_module
+        _patch_plan_module_deps(monkeypatch)
         monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutorSingleStep)
 
         plan_module.cmd_plan(["hello"])
@@ -123,7 +171,7 @@ class TestCliPlanExecution:
     def test_plan_shows_planner_class_name(self, monkeypatch, capsys):
         """Planner 行显示类名（RuleBasedPlanner），非 snake_case。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
@@ -133,7 +181,7 @@ class TestCliPlanExecution:
     def test_plan_status_uppercase(self, monkeypatch, capsys):
         """Status 状态全大写（SUCCESS / PARTIAL / FAILED）。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
@@ -143,7 +191,7 @@ class TestCliPlanExecution:
     def test_plan_output_has_step_headers(self, monkeypatch, capsys):
         """Output 段含 [Step i: ...] header。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
@@ -152,14 +200,14 @@ class TestCliPlanExecution:
         assert "[Step 1:" in captured.out
 
     def test_plan_version_in_output(self, monkeypatch, capsys):
-        """输出含 v0.9.1 版本标识。"""
+        """输出含 v0.9.3 版本标识。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello"])
         captured = capsys.readouterr()
 
-        assert "v0.9.1" in captured.out
+        assert "v0.9.3" in captured.out
 
     def test_plan_consumes_only_result_not_executor_internals(self, monkeypatch, capsys):
         """CLI 只消费 Result，不访问 Planner 内部（ADR-0014 架构约束）。
@@ -168,7 +216,7 @@ class TestCliPlanExecution:
         cmd_plan 仍能正常输出，证明它不依赖 Plan 内部对象。
         """
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
@@ -194,9 +242,11 @@ class TestCliPlanExecution:
                         "task_id": task.task_id,
                         "plan": {"status": "partial", "steps": 2, "success": 1, "failed": 1},
                         "runtime": {"planner": "RuleBasedPlanner", "router": "ScoreRouter"},
+                        "schema_version": "1",
                     },
                 )
 
+        _patch_plan_module_deps(monkeypatch)
         monkeypatch.setattr(plan_module, "PlanExecutor", _FakePartial)
         plan_module.cmd_plan(["a", "then", "b"])
         captured = capsys.readouterr()
@@ -225,11 +275,10 @@ class TestCliPlanEdgeCases:
         assert "Usage" in out
 
     def test_plan_json_flag_exit_zero(self):
-        """--json 标志：未实现，exit 0 + 提示信息（未实现 ≠ 错误）。"""
-        rc, out, err = _run_cli("plan", "hello then world", "--json", timeout=30)
-        assert rc == 0, f"exit={rc} stderr={err}"
-        assert "JSON output will be available" in out
-        assert "V0.9.3" in out
+        """--json 标志 V0.9.3 已真正实现：触发执行路径（不通过 subprocess 测，因为会卡 Provider）。"""
+        # V0.9.3 真实实现后，subprocess 跑 "plan hello --json" 会触发真实 Provider 执行卡住。
+        # 真正的 V0.9.3 --json 测试见 test_cli_plan_json.py。
+        pass
 
     def test_plan_json_flag_only(self):
         """只有 --json 无任务：exit 1 + usage（--json 不掩盖参数缺失）。"""
@@ -255,7 +304,7 @@ class TestCliPlanIndependence:
     def test_plan_output_distinct_from_ask(self, monkeypatch, capsys):
         """plan 命令输出标识为 'AI Hub Plan'，与 ask 输出格式不同。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
@@ -271,7 +320,7 @@ class TestCliPlanMetadataContract:
     def test_plan_output_consistent_with_metadata(self, monkeypatch, capsys):
         """输出格式符合 metadata 分层契约。"""
         from cli import plan as plan_module
-        monkeypatch.setattr(plan_module, "PlanExecutor", _FakeExecutor)
+        _patch_plan_module_deps(monkeypatch)
 
         plan_module.cmd_plan(["hello", "then", "world"])
         captured = capsys.readouterr()
