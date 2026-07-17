@@ -13,6 +13,8 @@
 from planner.plan import Plan, Step
 from planner.base import Planner
 from planner.rule_based_planner import RuleBasedPlanner
+from planner.llm_planner import LLMPlanner
+from planner.plan_validator import PlanValidator
 from planner.executor import PlanExecutor
 
 __all__ = [
@@ -20,5 +22,7 @@ __all__ = [
     "Step",
     "Planner",
     "RuleBasedPlanner",
+    "LLMPlanner",
+    "PlanValidator",
     "PlanExecutor",
 ]

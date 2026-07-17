@@ -24,6 +24,7 @@ from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from planner.executor import PlanExecutor
 from planner.rule_based_planner import RuleBasedPlanner
+from planner.llm_planner import LLMPlanner
 
 
 def _build_registry():
@@ -59,17 +60,19 @@ def cmd_plan(args: list[str]) -> None:
     """执行复合任务：分解 → 多步执行 → 聚合。
 
     用法：
-      ai-hub plan "<task>"          人类可读输出
+      ai-hub plan "<task>"          人类可读输出（RuleBasedPlanner）
+      ai-hub plan "<task>" --llm    使用 LLMPlanner 语义分解（V0.9.2）
       ai-hub plan "<task>" --json   V0.9.3 实现（当前 exit 0 + 提示）
     """
     if not args:
-        print('Usage: ai-hub plan "<composite task description>" [--json]')
+        print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
         sys.exit(1)
 
     json_output = "--json" in args
-    task_args = [a for a in args if a != "--json"]
+    use_llm = "--llm" in args
+    task_args = [a for a in args if a not in ("--json", "--llm")]
     if not task_args:
-        print('Usage: ai-hub plan "<composite task description>" [--json]')
+        print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
         sys.exit(1)
 
     # --json 占位：未实现 ≠ 错误，exit 0（ADR-0014）
@@ -87,7 +90,14 @@ def cmd_plan(args: list[str]) -> None:
     quota = QuotaManager()
     hr = HealthRegistry()
     router = ScoreRouter(registry, quota_manager=quota, health_registry=hr)
-    executor = PlanExecutor(router=router, planner=RuleBasedPlanner())
+
+    # Planner 选择：--llm 用 LLMPlanner（共享同一 Router），否则 RuleBasedPlanner（ADR-0015）
+    if use_llm:
+        planner = LLMPlanner(router=router)
+    else:
+        planner = RuleBasedPlanner()
+
+    executor = PlanExecutor(router=router, planner=planner)
 
     task = Task.from_text(text)
 
