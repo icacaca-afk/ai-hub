@@ -39,6 +39,7 @@ from planner.plan_store import PlanStore, DEFAULT_STORE_SIZE
 from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
 from planner.trace_collector import InMemoryTraceCollector
+from planner.sqlite_execution_store import SQLiteExecutionStore
 
 
 # V0.9.3: 进程内 PlanStore（环形缓冲 N=10），供 cmd_inspect 查询
@@ -54,6 +55,12 @@ _EVENT_BUS = EventBus()
 _TRACE_COLLECTOR = InMemoryTraceCollector()
 _TRACE_COLLECTOR.attach(_EVENT_BUS)
 
+# V0.9.5: SQLiteExecutionStore — EventBus 的独立 Consumer（持久化，跨进程）
+# 与 TraceCollector 并列订阅同一 EventBus，互不干扰（ADR-0018）。
+# cmd_exec_history 读取此 store。
+_SQLITE_STORE = SQLiteExecutionStore()
+_SQLITE_STORE.attach(_EVENT_BUS)
+
 
 def get_plan_store() -> PlanStore:
     """暴露 PlanStore 给 cli/inspect.py 使用（V0.9.3）。"""
@@ -68,6 +75,10 @@ def get_event_bus() -> EventBus:
 # V0.9.4: 把 TraceCollector 注入 cli/trace.py 单例
 from cli import trace as _trace_module  # noqa: E402 — 必须 _PLAN_STORE 之后
 _trace_module.set_trace_collector(_TRACE_COLLECTOR)
+
+# V0.9.5: 把 SQLiteExecutionStore 注入 cli/history.py 单例
+from cli import history as _history_module  # noqa: E402
+_history_module.set_execution_store(_SQLITE_STORE)
 
 
 def _build_registry():
@@ -167,7 +178,7 @@ def _print_json_output(task: Task, result) -> None:
     """V0.9.4: 输出结构化 JSON（ADR-0016 + ADR-0017 schema）。"""
     # 安全序列化：Result.metadata 是 dict，Result.to_dict() 处理嵌套
     payload = {
-        "version": "0.9.4",
+        "version": "0.9.5",
         "task": {
             "text": task.content,
             "task_id": task.task_id,
@@ -187,7 +198,7 @@ def _print_json_output(task: Task, result) -> None:
 
 def _print_human_output(text: str, result) -> None:
     """V0.9.4 人类可读输出（V0.9.1 格式 + V0.9.4 schema_version/aggregate_metrics）。"""
-    print("AI Hub Plan — v0.9.4")
+    print("AI Hub Plan — v0.9.5")
     print()
     print("Task:")
     print(f"  {text}")

@@ -27,6 +27,7 @@ from planner.execution_event import ExecutionEvent
 from planner.execution_metrics import ExecutionMetrics
 from planner.event_bus import EventBus
 from planner.trace_collector import InMemoryTraceCollector
+from planner.sqlite_execution_store import SQLiteExecutionStore
 from planner.executor import PlanExecutor
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     "ExecutionMetrics",
     "EventBus",
     "InMemoryTraceCollector",
+    "SQLiteExecutionStore",
     "PlanExecutor",
 ]

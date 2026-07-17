@@ -26,6 +26,7 @@ from cli.explain_route import cmd_explain_route
 from cli.plan import cmd_plan
 from cli.inspect import cmd_inspect
 from cli.trace import cmd_trace
+from cli.history import cmd_exec_history
 
 
 def _build_registry() -> CapabilityRegistry:
@@ -691,6 +692,8 @@ def main() -> None:
         print('  ai-hub inspect --list        List recent plans (V0.9.3)')
         print('  ai-hub trace <plan_id>       Trace plan execution timeline (V0.9.4)')
         print('  ai-hub trace --list          List traced plans (V0.9.4)')
+        print('  ai-hub exec-history          List recent plan executions (V0.9.5 SQLite)')
+        print('  ai-hub exec-history --plan <plan_id>  Show plan execution timeline (persisted)')
         print("  ai-hub history [N]      Show recent N tasks (default 10)")
         print("  ai-hub status           Show provider status")
         print("  ai-hub doctor           Diagnose provider issues")
@@ -709,6 +712,7 @@ def main() -> None:
         "plan": cmd_plan,
         "inspect": cmd_inspect,
         "trace": cmd_trace,
+        "exec-history": cmd_exec_history,
         "history": cmd_history,
         "status": cmd_status,
         "quota": cmd_quota,

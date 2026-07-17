@@ -26,6 +26,9 @@ Thumbs.db
 history/tasks.jsonl
 quota/quota_state.json
 
+# Execution Event Store (V0.9.5 SQLite)
+.ai-hub/
+
 # Test
 .pytest_cache/
 .coverage
