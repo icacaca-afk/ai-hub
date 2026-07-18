@@ -3,7 +3,7 @@
 - **里程碑**: V1.0.3
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: Proposed（待 ChatGPT 审核）
+- **状态**: Accepted（[ChatGPT 9.9/10 FINAL APPROVED](../reviews/0023-adr-chatgpt-review.md)）
 - **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0022 RetryStage](0022-retry-stage.md)
 - **前序 ChatGPT 路线图**: V1.0.2 代码审核 9.95/10 FINAL — "下一步：V1.0.3 CheckpointStage，**不要加入 Retry 改动**"
 
@@ -63,6 +63,33 @@ ChatGPT 在 V1.0.2 代码审核（9.95/10）中明确提出路线图：
 - **新增** `planner/stages/checkpoint_stage.py`
 - **新增** `tests/test_checkpoint_stage.py`
 
+### 2.4 ChatGPT 9.9/10 Q4 关键设计原则
+
+> **Snapshot 是 Runtime Projection，不是 ExecutionContext Serialization。**
+
+**含义**：
+- 主动挑选 Runtime 关键字段写入快照
+- **不是**：`pickle.dumps(ctx)` / `pickle.dumps(result)`
+- 避免未来 Snapshot 演化成"对象快照"，破坏 Schema 演进能力
+
+### 2.5 ChatGPT 9.9/10 关键边界原则
+
+> **Checkpoint is a durability boundary, not an execution boundary.**
+
+**含义**：
+- Checkpoint 负责：恢复（durability）
+- Checkpoint 不负责：控制执行（execution）
+- 执行还是：Pipeline
+- Checkpoint 只是："如果以后 Resume，这里可以继续。"
+
+**重要性**：这一句话让 Pipeline 的执行职责和 Checkpoint 的持久化职责完全分离。
+
+### 2.6 ChatGPT 9.9/10 Failure 原则
+
+> **Checkpoint 属于 Best Effort。**
+> Execution 成功 → Checkpoint 写失败 → warning → Execution 仍 Success
+> 不允许：Execution → Checkpoint Exception → Pipeline FAIL
+
 ---
 
 ## 3. 核心设计
@@ -103,27 +130,50 @@ class CheckpointSnapshot:
 
 **关键决策**：**仅快照 ctx 关键字段**，不存 ExecutionContext 整个对象（含 result / stop 等中间态）。
 
-### 3.3 存储后端
+### 3.3 存储后端（抽象层，ChatGPT 9.9/10 关键采纳）
 
-**复用** [V0.9.5 SQLiteExecutionStore](.../v0.9/sqlite-execution-store.md)，**不**新建表。
+**契约层**：依赖 `ExecutionStore` 抽象（V0.9.5 Protocol），**不**绑定 SQLite。
 
-**方式**：用 `ExecutionEvent` 写入，但 `event_type="checkpoint"`，`payload` 为 `CheckpointSnapshot` 的 JSON 序列化。
+**运行时**：默认实现仍是 `SQLiteExecutionStore`（V0.9.5 已存在）。
+
+**方式**：用 `ExecutionEvent` 写入，`event_type="checkpoint"`，`payload` 为 `CheckpointSnapshot` 的 JSON 序列化。
 
 ```python
-event = ExecutionEvent(
-    event_id=uuid4().hex,
-    task_id=ctx.task.task_id,
-    event_type="checkpoint",
-    timestamp=time.time(),
-    payload=snapshot.to_dict(),  # JSON-friendly dict
-)
-store.append(event)
+# 契约层：依赖 ExecutionStore 抽象
+class CheckpointStage:
+    def __init__(self, store: ExecutionStore):  # 抽象, 不是 SQLiteExecutionStore
+        if store is None:
+            raise ValueError("CheckpointStage requires a non-None ExecutionStore")
+        self.store = store
+
+    def __call__(self, ctx):
+        ...
+        event = ExecutionEvent(
+            event_id=uuid4().hex,
+            task_id=ctx.task.task_id,
+            event_type="checkpoint",
+            timestamp=time.time(),
+            payload=snapshot.to_dict(),  # JSON-friendly dict
+        )
+        self.store.append(event)  # 调用抽象
+        ...
 ```
 
-**为什么不新建表**：
-- 复用 execution_events schema，无需迁移
-- 统一查询（一次 SELECT 拿到所有执行事件 + 检查点）
-- 与 EventBus 兼容
+**为什么用抽象不绑 SQLite**（ChatGPT 9.9/10 Q2 关键建议）：
+
+> "Contract 最好不要绑定 SQLite。因为 Runtime Contract 已经说过：Storage is Disposable。Checkpoint 不应该知道底层：SQLite / Memory / Remote / S3 以后都应该可以。"
+
+- ✅ 遵循 Runtime Contract "Storage is Disposable" 原则
+- ✅ 未来可换 Memory / Remote / S3 实现（测试 / 部署）
+- ✅ 复用 execution_events schema
+- ✅ 统一查询（一次 SELECT 拿全部）
+- ✅ 与 EventBus 兼容
+- ❌ 不新建 checkpoint 表（避免双数据源）
+
+**Contract vs Runtime 区分**：
+- **Contract**（ADR / Runtime Contract / Stage 协议）: 写 `ExecutionStore`
+- **Runtime**（实际部署）: 传 `SQLiteExecutionStore()` 实例
+- `default_pipeline(include_checkpoint=True, execution_store=SQLiteExecutionStore())`
 
 ### 3.4 序列化格式
 
@@ -384,19 +434,34 @@ def default_pipeline(
 
 ---
 
-## 6. 关键不变量（来自 Runtime Contract §9.1.4 新增）
+## 6. 关键不变量（Runtime Contract §9.1.4 新增，ChatGPT 9.9/10 强化）
 
 ```markdown
 #### 9.1.4 CheckpointStage 专属原则（V1.0.3 新增）
 
-- CheckpointStage MUST NOT 修改 ExecutionContext（仅写存储，不改 ctx）
-- CheckpointStage MUST 写快照到 ExecutionStore（V0.9.5 SQLiteExecutionStore）
-- CheckpointStage MUST NOT 重试 / 恢复（仅生成快照，恢复 V1.x 评估）
-- CheckpointStage MUST NOT 抛异常（写失败 → logger.error → pass）
-- CheckpointStage MUST 仅快照 ctx 关键字段（不存整个 ctx）
-- CheckpointStage MUST NOT 新建表（复用 execution_events schema）
-- CheckpointStage SHOULD 在最末（默认顺序 [Retry, Metrics, Checkpoint]）
+**MUST（强制约束）**：
+
+- **CheckpointStage MUST NOT** 修改 ExecutionContext（仅写存储，不改 ctx）
+- **CheckpointStage MUST** 写快照到 ExecutionStore（V0.9.5 Protocol 抽象）
+- **CheckpointStage MUST** 使用 ExecutionStore 抽象（不绑定具体实现，遵循 "Storage is Disposable"）
+- **CheckpointStage MUST NOT** 重试 / 恢复（仅生成快照）
+- **CheckpointStage MUST NOT** 抛异常（写失败 → logger.warning → pass）
+- **CheckpointStage MUST** 仅快照 ctx 关键字段（不存整个 ctx）
+- **CheckpointStage MUST NOT** 新建表（复用 execution_events schema）
+- **CheckpointStage MUST NOT serialize** Runtime Object（Provider / Bridge / Router / ExecutionContext / Callable / File Handle）
+  - 仅快照：Runtime Data（str / int / float / bool / list / dict）
+- **CheckpointStage MUST** 写 event_type="checkpoint"（与 EventBus 统一）
+
+**SHOULD（推荐约束）**：
+
+- **CheckpointStage SHOULD** 在最末（默认顺序 [Retry, Metrics, Checkpoint]）
+- **CheckpointStage SHOULD** be replayable（Snapshot 应能被未来 Resume 独立使用，不依赖 Python Object）
 - 失败信息 SHOULD 写入快照 error 字段（供后续调试）
+
+**Best Effort 原则**（ChatGPT 9.9/10 Failure Policy）：
+
+- Execution 成功 → Checkpoint 写失败 → warning → Execution 仍 Success
+- 不允许：Execution → Checkpoint Exception → Pipeline FAIL
 ```
 
 ---
@@ -431,12 +496,19 @@ def default_pipeline(
 
 ## 8. 测试策略
 
-15 个测试：
+21 个测试（15 基础 + 6 ChatGPT 9.9/10 Q8 补充）：
 - TestCheckpointSnapshot (3): 构造 / 序列化 / 关键字段覆盖
 - TestCheckpointStageBasics (4): 成功/失败/无 store/短路
 - TestCheckpointStageSQLite (3): 写 SQLite / event_type=checkpoint / 多次写
 - TestCheckpointStageIntegration (3): Stage 顺序 / metrics 在 checkpoint 前 / retry + checkpoint
 - TestCheckpointStageFailureHandling (2): 写失败不抛异常 / 构造失败不抛异常
+- **TestCheckpointStageChatGPTEdgeCases (6)**: ChatGPT 9.9/10 Q8 建议
+  - `test_failed_bridge_result_also_checkpointed`：success=False 也保存（失败可 resume）
+  - `test_store_exception_does_not_break_pipeline`：store.append 抛 Exception → Pipeline 一致
+  - `test_empty_output_serialization`：空字符串 JSON 正常
+  - `test_artifacts_does_not_modify_original`：artifacts 很多不修改原对象
+  - `test_none_server_metrics_becomes_empty_dict`：server_metrics=None → JSON {}
+  - `test_snapshot_json_round_trip`：to_dict → json.dumps → json.loads 一致
 
 ---
 
