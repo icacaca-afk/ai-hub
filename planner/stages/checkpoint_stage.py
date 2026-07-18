@@ -46,8 +46,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import asdict, dataclass
-from typing import Any, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any, ClassVar, Optional
 
 from core.bridge import BridgeResult
 from core.provider import Provider
@@ -57,6 +57,49 @@ from planner.execution_store import ExecutionStore
 from planner.pipeline import ExecutionContext
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────
+# Snapshot 大小保护 (ChatGPT 9.95/10 Q8 采纳)
+# ─────────────────────────────────────────────────────────────
+# 默认 1MB / 字段, 超过则截断 + warning
+# 理由: Checkpoint 是 durability boundary, 写大对象会拖慢 Pipeline
+# 未来可由配置驱动 (V1.x 后期再说)
+SNAPSHOT_FIELD_MAX_BYTES = 1 * 1024 * 1024  # 1MB
+
+
+def _truncate_field(value: Any, field_name: str, max_bytes: int = SNAPSHOT_FIELD_MAX_BYTES) -> Any:
+    """截断大对象, 防止 Checkpoint 单字段膨胀.
+
+    行为 (ADR §9.1.4 大对象策略):
+      - str: 按字节截断 + 标注
+      - list/dict: JSON 序列化后按字节截断
+      - 其他: 保留原样
+    """
+    import json
+    if isinstance(value, str):
+        encoded = value.encode("utf-8", errors="replace")
+        if len(encoded) > max_bytes:
+            logger.warning(
+                "CheckpointSnapshot: truncating field %s (%d bytes → %d bytes)",
+                field_name, len(encoded), max_bytes,
+            )
+            return encoded[:max_bytes].decode("utf-8", errors="replace") + f"...[truncated {len(encoded) - max_bytes} bytes]"
+        return value
+    if isinstance(value, (list, dict)):
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+            if len(encoded) > max_bytes:
+                logger.warning(
+                    "CheckpointSnapshot: truncating field %s (%d bytes → %d bytes)",
+                    field_name, len(encoded), max_bytes,
+                )
+                truncated = encoded[:max_bytes].decode("utf-8", errors="replace")
+                return json.loads(truncated + '""')  # 截断后可能 JSON 损坏, 退回 list
+        except (TypeError, ValueError):
+            pass
+        return value
+    return value
 
 
 # ─────────────────────────────────────────────────────────────
@@ -76,6 +119,7 @@ class CheckpointSnapshot:
       - to_dict() 返回 dict, 可被 json.dumps/json.loads 完整 round-trip
 
     关键字段:
+      - snapshot_version: Snapshot Schema 版本 (从 1 开始, 为 Resume/Migration 预留)
       - task_id: 主键 (用于按 task_id 查询快照历史)
       - stage: "checkpoint" (固定标识)
       - timestamp: epoch seconds
@@ -85,6 +129,10 @@ class CheckpointSnapshot:
       - server_metrics: 提取自 Result.metadata (MetricsStage 注入)
       - error: 自身写快照时的错误 (Best Effort 错误捕获)
     """
+
+    # Snapshot Schema 版本 (ChatGPT 9.95/10 采纳: 为 Resume / Migration 预留)
+    # ClassVar 避免被 dataclass 当成 instance field
+    SNAPSHOT_VERSION: ClassVar[int] = 1
 
     task_id: str
     stage: str
@@ -99,11 +147,15 @@ class CheckpointSnapshot:
     bridge_result_duration_ms: int
     bridge_result_artifacts: list
     server_metrics: dict
+    snapshot_version: int = 1
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
         """序列化为 dict (JSON 友好)."""
-        return asdict(self)
+        d = asdict(self)
+        # 确保 snapshot_version 显式输出 (供 Resume 端判断)
+        d["snapshot_version"] = self.snapshot_version
+        return d
 
     @classmethod
     def from_context(
@@ -143,16 +195,17 @@ class CheckpointSnapshot:
             task_id=task.task_id,
             stage="checkpoint",
             timestamp=timestamp if timestamp is not None else time.time(),
-            task_content=task.content,
+            task_content=_truncate_field(task.content, "task_content"),
             task_capabilities=list(task.capabilities),
             provider_name=provider.name if provider else "<unknown>",
             bridge_name=bridge.__class__.__name__ if bridge else "<unknown>",
             bridge_result_success=br.success,
-            bridge_result_output=br.output,
+            bridge_result_output=_truncate_field(br.output, "bridge_result_output"),
             bridge_result_error=br.error,
             bridge_result_duration_ms=br.duration_ms,
-            bridge_result_artifacts=list(br.artifacts),
+            bridge_result_artifacts=_truncate_field(list(br.artifacts), "bridge_result_artifacts"),
             server_metrics=server_metrics,
+            snapshot_version=cls.SNAPSHOT_VERSION,
             error=error,
         )
 

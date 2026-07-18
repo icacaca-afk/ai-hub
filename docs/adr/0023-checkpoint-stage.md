@@ -63,14 +63,27 @@ ChatGPT 在 V1.0.2 代码审核（9.95/10）中明确提出路线图：
 - **新增** `planner/stages/checkpoint_stage.py`
 - **新增** `tests/test_checkpoint_stage.py`
 
-### 2.4 ChatGPT 9.9/10 Q4 关键设计原则
+### 2.4 ChatGPT 9.9/10 Q4 + 9.95/10 关键设计原则
 
+> **CheckpointSnapshot is a Runtime Projection rather than a serialization of ExecutionContext.**
+>
 > **Snapshot 是 Runtime Projection，不是 ExecutionContext Serialization。**
 
 **含义**：
 - 主动挑选 Runtime 关键字段写入快照
 - **不是**：`pickle.dumps(ctx)` / `pickle.dumps(result)`
 - 避免未来 Snapshot 演化成"对象快照"，破坏 Schema 演进能力
+
+**关键不变量**（来自 Runtime Contract §9.1.4）：
+- 仅提取关键字段（task / bridge_result / routing 决策）
+- `provider_name` / `bridge_name` **仅存字符串**（不存对象）
+- `server_metrics` 仅 dict 类型（MetricsStage 注入）
+- `snapshot_version = 1`（为未来 Resume / Migration 预留 Schema 版本空间）
+
+**大对象策略**（ChatGPT 9.95/10 Q8 采纳）：
+- 单字段 > 1MB → 截断 + warning
+- 防止 Checkpoint 单字段膨胀拖慢 Pipeline
+- 未来可由配置驱动（V1.x 后期再说）
 
 ### 2.5 ChatGPT 9.9/10 关键边界原则
 

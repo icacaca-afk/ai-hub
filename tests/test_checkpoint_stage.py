@@ -587,3 +587,114 @@ class InMemoryStore(ExecutionStore):
 
     def append(self, event: ExecutionEvent) -> None:
         self.events.append(event)
+
+    def query_events(self, plan_id: str):
+        return [e for e in self.events if e.plan_id == plan_id]
+
+
+# ── TestCheckpointStageChatGPT95EdgeCases (3, ChatGPT 9.95/10 采纳) ──
+
+class TestCheckpointStageChatGPT95EdgeCases:
+    """ChatGPT 9.95/10 代码审核采纳的 3 个非阻塞测试。"""
+
+    def test_duplicate_event_id_does_not_break_pipeline(self):
+        """ChatGPT 9.95/10 Q8 采纳: 重复 event_id → warning → Pipeline SUCCESS.
+
+        验证 Stage 层: 即使 store 出现重复 event_id 警告, Pipeline 不受影响。
+        """
+        import logging
+        class DuplicateWarningStore(ExecutionStore):
+            """总是发出重复 event_id 警告的 store。"""
+            def __init__(self):
+                self.events = []
+                self.duplicate_warnings = 0
+
+            def append(self, event):
+                logging.getLogger("test").warning(
+                    "Duplicate event_id=%s, skipping", event.event_id
+                )
+                self.duplicate_warnings += 1
+                # 不抛异常 (Best Effort)
+
+        store = DuplicateWarningStore()
+        stage = CheckpointStage(store=store)
+        bridge = FakeBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        ctx = ExecutionContext(
+            task=make_task(task_id="ck-dup"),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_success_br(),
+        )
+
+        new_ctx = stage(ctx)
+        # Pipeline 保持
+        assert new_ctx is ctx
+        assert new_ctx.bridge_result.success is True
+        # warning 触发
+        assert store.duplicate_warnings == 1
+
+    def test_large_output_truncated_with_warning(self, caplog):
+        """ChatGPT 9.95/10 Q8 采纳: 10MB 大对象 → 截断 + warning.
+
+        验证: 超过 1MB 的字段被 _truncate_field 截断, warning 写入 logger.
+        """
+        import logging
+        caplog.set_level(logging.WARNING, logger="planner.stages.checkpoint_stage")
+
+        # 构造 10MB output
+        large_output = "x" * (10 * 1024 * 1024)  # 10MB
+        bridge = FakeBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        store = InMemoryStore()
+        stage = CheckpointStage(store=store)
+        ctx = ExecutionContext(
+            task=make_task(task_id="ck-large"),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=BridgeResult(
+                success=True,
+                output=large_output,
+                error=None,
+                duration_ms=100,
+                artifacts=[],
+                raw=None,
+            ),
+        )
+
+        stage(ctx)
+
+        events = store.query_events(plan_id="ck-large")
+        assert len(events) == 1
+        data = events[0].data
+        # 截断后约 1MB (略大于 1MB 因为有截断标注)
+        assert len(data["bridge_result_output"]) < 2 * 1024 * 1024
+        assert "...[truncated" in data["bridge_result_output"]
+        # warning 触发
+        assert any("truncating" in r.message for r in caplog.records)
+
+    def test_snapshot_version_in_to_dict(self):
+        """ChatGPT 9.95/10 采纳: snapshot_version=1 在 to_dict() 输出中.
+
+        验证: 为未来 Resume / Migration 预留版本空间。
+        """
+        snap = CheckpointSnapshot(
+            task_id="ck-ver",
+            stage="checkpoint",
+            timestamp=1234567890.0,
+            task_content="version test",
+            task_capabilities=["code.generate"],
+            provider_name="openai",
+            bridge_name="APIBridge",
+            bridge_result_success=True,
+            bridge_result_output="ok",
+            bridge_result_error=None,
+            bridge_result_duration_ms=100,
+            bridge_result_artifacts=[],
+            server_metrics={},
+        )
+        d = snap.to_dict()
+        # 显式 snapshot_version=1
+        assert d["snapshot_version"] == 1
+        # 静态常量
+        assert CheckpointSnapshot.SNAPSHOT_VERSION == 1
