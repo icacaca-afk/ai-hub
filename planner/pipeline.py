@@ -409,11 +409,18 @@ class ExecutionPipeline:
         pre_bridge_stages: Optional[list] = None,
         post_bridge_stages: Optional[list] = None,
         quota: Any = None,
+        hooks: Any = None,  # V1.0.5: PipelineHooks
     ):
         self.router = router
         self.pre_bridge_stages = pre_bridge_stages or []
         self.post_bridge_stages = post_bridge_stages or []
         self.quota = quota
+        # V1.0.5: Hooks (V2 import 避免循环依赖, V1.0.5 局部 import)
+        if hooks is None:
+            from planner.hooks import PipelineHooks
+            self.hooks = PipelineHooks()
+        else:
+            self.hooks = hooks
 
     def run(self, task: Task) -> Result:
         """执行 task 经过所有 Stage，返回 Result。
@@ -423,37 +430,81 @@ class ExecutionPipeline:
             仍执行剩余的 CheckpointStage (记录 abort 事实, Runtime Observability)
           - 然后再 return (不抛异常, Best Effort)
 
+        V1.0.5 增量 (ADR-0025):
+          - Pipeline.run() 入口 fire_before_pipeline
+          - 每个 Stage 前后 fire_before_stage / fire_after_stage
+          - Stage 异常时 fire_on_error (但仍 re-raise, V1.0.5 仅观察)
+          - ctx.stop 触发时 fire_on_stop
+          - Pipeline.run() 出口 fire_after_pipeline
+          - 全部 Best Effort, Hook 失败不影响主链路
+
         执行流程:
             1. Pipeline.run(task) 入口
-            2. for stage in pre_bridge_stages: ctx = stage(ctx); if ctx.stop: break
-            3. provider / bridge = ctx.provider / ctx.bridge (来自 RouteStage)
-            4. br = bridge.run(task)  # Base Execute
-            5. ctx = ctx.with_bridge_result(br)
-            6. for stage in post_bridge_stages: ctx = stage(ctx); if ctx.stop: handle_abort
-            7. handle_abort: 执行剩余 CheckpointStage (V1.0.4 新增), 然后 return
-            8. return PipelineExecutor.assemble_result(ctx)
+            2. fire_before_pipeline (V1.0.5)
+            3. for stage in pre_bridge_stages: fire_before_stage / stage(ctx) / fire_after_stage; if ctx.stop: fire_on_stop, return
+            4. provider / bridge = ctx.provider / ctx.bridge (来自 RouteStage)
+            5. br = bridge.run(task)  # Base Execute
+            6. ctx = ctx.with_bridge_result(br)
+            7. for stage in post_bridge_stages: fire_before_stage / stage(ctx) / fire_after_stage; if ctx.stop: handle_abort
+            8. handle_abort: fire_on_stop, 执行剩余 CheckpointStage, 然后 return
+            9. fire_after_pipeline (V1.0.5)
+            10. return PipelineExecutor.assemble_result(ctx)
         """
         ctx = ExecutionContext(task=task)
 
+        # V1.0.5: Hook before_pipeline
+        if self.hooks.enabled:
+            self.hooks.fire_before_pipeline(ctx)
+
         # 1. Pre-bridge stages
         for stage in self.pre_bridge_stages:
-            ctx = stage(ctx)
+            if self.hooks.enabled:
+                self.hooks.fire_before_stage(ctx, stage.name)
+            try:
+                ctx = stage(ctx)
+            except Exception as e:
+                # V1.0.5: Hook on_error (但仍 re-raise)
+                if self.hooks.enabled:
+                    self.hooks.fire_on_error(ctx, stage.name, e)
+                raise
+            if self.hooks.enabled:
+                self.hooks.fire_after_stage(ctx, stage.name)
             if ctx.stop:
-                return ctx.result if ctx.result else self._error_result(
+                # V1.0.5: Hook on_stop
+                if self.hooks.enabled:
+                    self.hooks.fire_on_stop(ctx, "stop_flag")
+                if ctx.result is not None:
+                    return ctx.result
+                return self._error_result(
                     ctx, f"stopped in pre_bridge stage '{stage.name}'"
                 )
 
         # 2. Base execute（bridge.run）
         ctx = self._base_execute(ctx)
         if ctx.stop:
-            return ctx.result if ctx.result else self._error_result(
+            # V1.0.5: Hook on_stop
+            if self.hooks.enabled:
+                self.hooks.fire_on_stop(ctx, "stop_flag")
+            if ctx.result is not None:
+                return ctx.result
+            return self._error_result(
                 ctx, "stopped in base_execute"
             )
 
         # 3. Post-bridge stages
         aborted_idx = -1
         for i, stage in enumerate(self.post_bridge_stages):
-            ctx = stage(ctx)
+            if self.hooks.enabled:
+                self.hooks.fire_before_stage(ctx, stage.name)
+            try:
+                ctx = stage(ctx)
+            except Exception as e:
+                # V1.0.5: Hook on_error
+                if self.hooks.enabled:
+                    self.hooks.fire_on_error(ctx, stage.name, e)
+                raise
+            if self.hooks.enabled:
+                self.hooks.fire_after_stage(ctx, stage.name)
             if ctx.stop:
                 aborted_idx = i
                 break
@@ -461,12 +512,23 @@ class ExecutionPipeline:
         # 4. V1.0.4 关键: 如果 stop, 仍执行剩余 CheckpointStage (记录 abort 事实)
         # ChatGPT 9.9/10 Q4: "Condition -> metadata -> Checkpoint -> Pipeline stop"
         if ctx.stop and aborted_idx >= 0:
+            # V1.0.5: 提取 stopped_by
+            stopped_by = self._get_stopped_by(ctx, aborted_idx)
+            # V1.0.5: Hook on_stop
+            if self.hooks.enabled:
+                self.hooks.fire_on_stop(ctx, stopped_by)
             for stage in self.post_bridge_stages[aborted_idx + 1:]:
                 # 识别 CheckpointStage (duck typing via name + store attr)
                 if stage.name == "checkpoint" and hasattr(stage, "store"):
+                    if self.hooks.enabled:
+                        self.hooks.fire_before_stage(ctx, stage.name)
                     ctx = stage(ctx)
                     # CheckpointStage 不修改 ctx.stop, 也不设 result
                     # (只写存储, pass)
+                    if self.hooks.enabled:
+                        self.hooks.fire_after_stage(ctx, stage.name)
+                    # V1.0.4: 即使 abort 也要写 Checkpoint
+                    break
             # 然后 return
             if ctx.result is not None:
                 return ctx.result
@@ -476,7 +538,23 @@ class ExecutionPipeline:
             )
 
         # 5. 组装 Result
-        return PipelineExecutor.assemble_result(ctx)
+        result = PipelineExecutor.assemble_result(ctx)
+        # V1.0.5: Hook after_pipeline
+        if self.hooks.enabled:
+            self.hooks.fire_after_pipeline(ctx, result)
+        return result
+
+    def _get_stopped_by(self, ctx: ExecutionContext, aborted_idx: int) -> str:
+        """V1.0.5: 提取 ctx.stop 来源 (优先 condition_eval, 兜底 stop_flag)."""
+        try:
+            condition_eval = (ctx.metadata or {}).get("condition_eval")
+            if isinstance(condition_eval, dict):
+                stopped_by = condition_eval.get("stopped_by")
+                if stopped_by:
+                    return stopped_by
+        except (AttributeError, TypeError):
+            pass
+        return "stop_flag"
 
     def _base_execute(self, ctx: ExecutionContext) -> ExecutionContext:
         """薄薄一层：bridge.run + quota 管理。
@@ -555,6 +633,7 @@ def default_pipeline(
     condition_name: str = "condition",
     include_checkpoint: bool = False,
     execution_store: Any = None,
+    hooks: Any = None,  # V1.0.5 新增
 ) -> ExecutionPipeline:
     """构造 V1.0.4 默认 Pipeline。
 
@@ -652,4 +731,5 @@ def default_pipeline(
         pre_bridge_stages=pre_bridge,
         post_bridge_stages=post_bridge,
         quota=quota,
+        hooks=hooks,  # V1.0.5 新增
     )

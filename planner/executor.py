@@ -84,6 +84,7 @@ class PlanExecutor:
         condition_name: str = "condition",
         include_checkpoint: bool = False,
         execution_store: Any = None,
+        hooks: Any = None,  # V1.0.5 新增
     ):
         """
         Args:
@@ -126,6 +127,7 @@ class PlanExecutor:
             condition_name=condition_name,
             include_checkpoint=include_checkpoint,
             execution_store=execution_store,
+            hooks=hooks,  # V1.0.5 新增
         )
         self.last_plan: Optional[Plan] = None
 
