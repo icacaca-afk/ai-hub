@@ -372,19 +372,35 @@ V1.0.1 引入 ExecutionPipeline 装饰器链后，所有执行期关注点（met
 - 反向顺序（`[MetricsStage, RetryStage]`）会导致 metrics 反映**首次失败**而非最终结果
 - 用户可自定义 stage 列表，仅 `default_pipeline()` 给出推荐顺序
 
-#### 9.1.3 RetryStage 专属原则（V1.0.2 新增）
+#### 9.1.3 RetryStage 专属原则（V1.0.2 新增，V1.0.2 强化）
 
-[ADR-0022](adr/0022-retry-stage.md) 定义 RetryStage 失败重试能力。Runtime Contract 同步：
+[ADR-0022](adr/0022-retry-stage.md) 定义 RetryStage 失败重试能力。Runtime Contract 同步（ChatGPT 9.95/10 Q8 建议：MUST/MUST NOT 形式）：
 
-- **RetryStage MUST NOT** 修改 routing 决策（`ctx.provider` / `ctx.bridge` 保持不变）
+**MUST（强制约束）**：
+
 - **RetryStage MUST** 重新调用 `ctx.bridge.run(ctx.task)` 触发重试
 - **RetryStage MUST** 用 `ctx.with_bridge_result(new_br)` 更新上下文
-- **RetryStage default `is_retryable`**: 仅网络/超时/5xx/限流（429）默认重试
-  - 不重试：4xx（除 429）、validation、permission、authentication、quota exhausted
+- **RetryStage MUST** preserve ExecutionContext immutability（不可变原则）
+- **RetryStage MUST** only retry current Bridge（不跨 Provider 重试）
+- **RetryStage MUST NOT** mutate Task（`ctx.task` 保持不变）
+- **RetryStage MUST NOT** mutate Provider（`ctx.provider` 保持不变）
+- **RetryStage MUST NOT** mutate Bridge（`ctx.bridge` 保持不变）
+- **RetryStage MUST NOT** reroute Provider（不允许换 Provider 重试）
 - **RetryStage MUST NOT** 重试永久错误（401/403/404/参数错误等）
 - **RetryStage failure**: pass（不抛异常，不污染主链路）
-- **RetryStage SHOULD** only retry idempotent bridge executions（ChatGPT 建议原则）
-- 4 种退避策略：`immediate` / `fixed` / `linear` / `exponential`（Stable API 字符串）
+
+**is_retryable 默认策略**（仅安全可重试，ChatGPT 9.9/10 唯一调整）：
+
+- **Priority 1**: `raw.status_code` (dict 时) — 5xx 全部 + 429 限流
+- **Priority 2**: `error` 文本模式匹配 — 网络/超时/限流/5xx 关键词
+- **Priority 3**: 保守不重试（4xx-除 429 / validation / permission / auth / quota / 未知错误）
+- 用户可自定义 `is_retryable` 函数完全覆盖默认行为
+
+**退避策略**（Stable API 字符串，4 种）：
+
+- `immediate` / `fixed` / `linear` / `exponential`
+- 退避延迟 `MUST` 遵守 `max_delay_ms` 上限保护
+- V1.0 `MUST NOT` 提供 Callable 退避（V1.x 评估）
 
 **幂等性原则**（ChatGPT ② 建议）：
 

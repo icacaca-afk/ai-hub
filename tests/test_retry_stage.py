@@ -594,3 +594,186 @@ class TestSafeRetryPatterns:
         """无明确错误信息的失败 → 不重试（保守）。"""
         assert _default_retryable(make_failure_br(error="")) is False
         assert _default_retryable(make_failure_br(error="Unknown random error")) is False
+
+
+# ── TestRetryStageEdgeCases (5 tests, ChatGPT 9.95/10 Q6 建议补充) ──
+
+class TestRetryStageEdgeCases:
+    """ChatGPT 9.95/10 建议补充的边界测试。"""
+
+    def test_retry_disabled_with_max_retries_zero(self):
+        """max_retries=0 + bridge 失败 → 0 次重试，bridge.call_count=0。"""
+        bridge = make_bridge_with_behavior(fail_times=10)
+        provider = FakeProvider("p1", bridge=bridge)
+        stage = RetryStage(
+            max_retries=0,
+            backoff="immediate",
+            is_retryable=lambda br: not br.success,
+        )
+        ctx = ExecutionContext(
+            task=make_task(),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_failure_br(error="transient"),
+        )
+
+        new_ctx = stage(ctx)
+
+        # max_retries=0 → 完全不重试
+        assert bridge.call_count == 0
+        assert stage.attempt_count == 0
+        # 保留原失败 result
+        assert new_ctx.bridge_result.success is False
+        assert new_ctx.bridge_result is ctx.bridge_result
+
+    def test_no_sleep_when_not_retryable(self):
+        """is_retryable=False → 0 次 sleep，0 次重试。"""
+        bridge = make_bridge_with_behavior()
+        provider = FakeProvider("p1", bridge=bridge)
+        sleeps = []
+        stage = RetryStage(
+            max_retries=3,
+            backoff="fixed",
+            initial_delay_ms=1000,  # 较大值，确保不 sleep
+            is_retryable=lambda br: False,  # 永远不重试
+            sleep=lambda s: sleeps.append(s),
+        )
+        ctx = ExecutionContext(
+            task=make_task(),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_failure_br(error="permanent"),
+        )
+
+        new_ctx = stage(ctx)
+
+        # 不可重试 → 0 sleep, 0 attempt
+        assert sleeps == []
+        assert stage.attempt_count == 0
+        assert bridge.call_count == 0
+        assert new_ctx.bridge_result.success is False
+
+    def test_consistent_attempts_on_persistent_exception(self):
+        """bridge.run 一直抛异常 → sleep 次数 = attempt 次数 = max_retries。"""
+        class AlwaysExplodingBridge(FakeBridge):
+            def run(self, task, **kwargs):
+                self._call_count += 1
+                raise RuntimeError(f"Persistent failure #{self._call_count}")
+
+        bridge = AlwaysExplodingBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        sleeps = []
+        stage = RetryStage(
+            max_retries=3,
+            backoff="fixed",
+            initial_delay_ms=50,
+            is_retryable=lambda br: not br.success,
+            sleep=lambda s: sleeps.append(s),
+        )
+        ctx = ExecutionContext(
+            task=make_task(),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_failure_br(error="first failure"),
+        )
+
+        new_ctx = stage(ctx)
+
+        # 3 次重试，每次都 sleep
+        assert len(sleeps) == 3
+        assert all(s == 0.05 for s in sleeps)  # fixed 50ms
+        assert stage.attempt_count == 3
+        assert bridge.call_count == 3
+        # 用尽后保留 ctx，不抛异常
+        assert new_ctx.bridge_result.success is False
+
+    def test_max_delay_clamp_exponential(self):
+        """exponential 退避触发 max_delay_ms 上限保护。"""
+        # initial=100, max=500: 100, 200, 400, 500(clamp), 500(clamp), 500(clamp)
+        # 直接验证 6 次 attempt，delay 序列: 100, 200, 400, 500, 500, 500
+        delays = [
+            compute_backoff_delay("exponential", i, 100, 500)
+            for i in range(1, 7)
+        ]
+        assert delays == [100, 200, 400, 500, 500, 500]
+
+    def test_metrics_reflects_final_result_after_retry(self):
+        """RetryStage + MetricsStage 集成：metrics 来自最终（重试后）的 bridge_result。"""
+        # 第一次失败，第二次成功
+        bridge = FakeBridge(
+            fail_times=1,
+            response="eventual success",
+        )
+        provider = FakeProvider("p1", bridge=bridge)
+        router = FakeRouter(provider)
+
+        retry_stage = RetryStage(
+            max_retries=3,
+            backoff="immediate",
+            is_retryable=lambda br: not br.success,
+        )
+        # 关键: 用一个会记录 metrics 顺序的 MetricsStage 替代品
+        # 直接用真实 MetricsStage，看最终 result.status
+        pipeline = ExecutionPipeline(
+            router=router,
+            pre_bridge_stages=[RouteStage(router)],
+            post_bridge_stages=[retry_stage, MetricsStage()],
+        )
+
+        result = pipeline.run(make_task())
+
+        # 关键验证: metrics 来自最终成功 result
+        # 如果 metrics 来自第一次失败, status 会是 'failed'
+        assert result.status == "success"
+        # bridge.call_count=2: 1 初始失败 + 1 重试成功
+        assert bridge.call_count == 2
+
+
+# ── TestRetryStageLogging (1 test, ChatGPT 9.95/10 Q4 验证) ──
+
+class TestRetryStageLogging:
+    """ChatGPT 9.95/10 Q4 验证: warning 日志包含 provider/attempt/exception 信息。"""
+
+    def test_warning_contains_provider_attempt_exception(self):
+        """bridge.run 抛异常 → warning 日志包含 provider/attempt/exception type。"""
+        import logging
+        from io import StringIO
+
+        # 捕获 log 输出
+        log_stream = StringIO()
+        handler = logging.StreamHandler(log_stream)
+        handler.setLevel(logging.WARNING)
+        logger_test = logging.getLogger("planner.stages.retry_stage")
+        logger_test.addHandler(handler)
+        logger_test.setLevel(logging.WARNING)
+
+        class ExplodingBridge(FakeBridge):
+            def run(self, task, **kwargs):
+                self._call_count += 1
+                raise ConnectionError("connection reset")
+
+        bridge = ExplodingBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        stage = RetryStage(
+            max_retries=2,
+            backoff="immediate",
+            is_retryable=lambda br: not br.success,
+        )
+        ctx = ExecutionContext(
+            task=make_task(),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_failure_br(error="first failure"),
+        )
+
+        try:
+            stage(ctx)
+        finally:
+            logger_test.removeHandler(handler)
+
+        log_output = log_stream.getvalue()
+        # 关键字段全部存在
+        assert "p1" in log_output  # provider name
+        assert "attempt=1/2" in log_output
+        assert "ConnectionError" in log_output
+        assert "connection reset" in log_output

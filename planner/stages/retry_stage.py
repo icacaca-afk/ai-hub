@@ -25,6 +25,21 @@
 #   - linear: initial_delay_ms * attempt
 #   - exponential (default): initial_delay_ms * 2^(attempt-1)
 #
+# Default Retry Policy（ChatGPT 9.95/10 文档化建议）：
+#   Priority 1: raw.status_code（如果 raw 是 dict）
+#     - 5xx 全部 (500/502/503/504) 重试
+#     - 429 限流 重试
+#     - 其他 status_code 不重试
+#   Priority 2: error message 文本模式匹配
+#     - 网络异常：TimeoutError / ConnectionError / URL Error
+#     - 限流：RateLimitError / "rate limit" / "too many requests"
+#     - 5xx：ServiceUnavailableError / InternalServerError / 等
+#     - "HTTP 5xx" / "HTTP 429"
+#   Priority 3: 保守不重试
+#     - 401 / 403 / 404 / 400 / quota / validation
+#     - 无明确错误信息
+#     - 用户可自定义 is_retryable 完全覆盖默认行为
+#
 # Stage 顺序（V1.0+ 约定）：
 #   post_bridge_stages = [RetryStage, MetricsStage]
 #   - 先重试（失败可重试）
@@ -308,9 +323,12 @@ class RetryStage:
                 new_br = ctx.bridge.run(ctx.task)
             except Exception as e:
                 # bridge.run 抛异常 → 继续下一次重试（不污染主链路）
+                # ChatGPT 9.95/10 Q4 建议: 包含 provider/attempt/exception type/message
                 logger.warning(
-                    "RetryStage attempt %d/%d raised: %s: %s",
-                    attempt, self.max_retries, type(e).__name__, str(e),
+                    "RetryStage provider=%s attempt=%d/%d raised %s: %s",
+                    ctx.provider.name if ctx.provider else "<unknown>",
+                    attempt, self.max_retries,
+                    type(e).__name__, str(e),
                 )
                 continue
 
