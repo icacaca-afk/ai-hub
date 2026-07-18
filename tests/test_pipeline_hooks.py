@@ -229,6 +229,73 @@ class TestPipelineHooksFailure:
         # 全部调用 (Best Effort)
         assert calls == ["h1", "h2", "h3"]
 
+    def test_hook_order_preserved_with_failures_in_middle(self):
+        """ChatGPT 9.93/10 Q7 采纳: 顺序断言 + 异常后 FIFO 继续.
+        A -> 失败 -> B -> 失败 -> C 仍继续.
+        关键: 顺序保持, 异常不中断后续.
+        """
+        order = []
+        def hook_a(ctx):
+            order.append("a-start")
+            raise RuntimeError("a broken")
+        def hook_b(ctx, n):
+            order.append("b-start")
+            raise RuntimeError("b broken")
+        def hook_c(ctx, n):
+            order.append("c-start")
+
+        hooks = PipelineHooks(
+            before_pipeline=[hook_a],
+            before_stage=[hook_b, hook_c],
+        )
+        ctx = ExecutionContext(task=make_task())
+        hooks.fire_before_pipeline(ctx)
+        hooks.fire_before_stage(ctx, "stage_x")
+        # 全部调用 (Best Effort + FIFO)
+        assert order == ["a-start", "b-start", "c-start"]
+
+    def test_after_stage_not_called_on_exception(self):
+        """ChatGPT 9.93/10 Q7 采纳: Stage 异常时 after_stage 不执行.
+        路径: before_stage -> stage(ctx) raise -> on_error -> raise
+        关键: after_stage 在异常路径不执行 (Pipeline.run() 内 try/except).
+        """
+        class FailingStage:
+            name = "fail_stage"
+            def __call__(self, ctx):
+                raise ValueError("stage broken")
+
+        order = []
+        def before(ctx, n):
+            order.append("before")
+        def after(ctx, n):
+            order.append("after")
+        def on_err(ctx, n, e):
+            order.append(f"on_error:{type(e).__name__}")
+
+        hooks = PipelineHooks(
+            before_stage=[before],
+            after_stage=[after],
+            on_error=[on_err],
+        )
+        bridge = FakeBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        router = FakeRouter(provider)
+        # 直接构造 pipeline 测异常路径 (FailingStage 作为 pre_bridge)
+        pipeline = ExecutionPipeline(
+            router=router,
+            pre_bridge_stages=[FailingStage()],
+            post_bridge_stages=[],
+            hooks=hooks,
+        )
+
+        task = make_task(task_id="ck-exc")
+        with pytest.raises(ValueError, match="stage broken"):
+            pipeline.run(task)
+        # 关键: before 执行, after 没执行, on_error 执行
+        assert "before" in order
+        assert "after" not in order
+        assert any(s.startswith("on_error:ValueError") for s in order)
+
     def test_all_hooks_fail_pipeline_unaffected(self):
         """所有 hook 都失败 -> 静默, 不抛."""
         def bad1(ctx):
