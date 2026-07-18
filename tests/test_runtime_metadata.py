@@ -390,3 +390,123 @@ class TestRuntimeMetadataNotFrozen:
         rm.stopped_by = "test"
         assert rm.server_metrics == {"a": 1}
         assert rm.stopped_by == "test"
+
+
+# ─────────────────────────────────────────────────────────────
+# TestHelperIdempotency (T3) — 采纳 ChatGPT 9.88/10 Non-blocking
+# ─────────────────────────────────────────────────────────────
+
+class TestHelperIdempotency:
+    """T3: helper 幂等性 — 多次调用 set_*() 结果一致.
+
+    避免重复同步 bug. e.g. Pipeline 中重试执行导致 helper 调用多次.
+    """
+
+    def _make_ctx(self):
+        from planner.pipeline import ExecutionContext
+        from core.task import Task
+        task = Task(task_id="t1", content="c", capabilities=["x"])
+        return ExecutionContext(task=task)
+
+    def test_set_condition_eval_idempotent(self):
+        """多次 set_condition_eval 相同输入, 结果一致"""
+        rm = RuntimeMetadata()
+        ctx = self._make_ctx()
+        eval1 = ConditionEval(
+            stage="condition", condition_name="c1", result=True,
+            action="skip", timestamp=100.0, stopped_by="condition:c1:skip",
+        )
+        rm.set_condition_eval(eval1, ctx=ctx)
+        eval2 = ConditionEval(
+            stage="condition", condition_name="c1", result=True,
+            action="skip", timestamp=100.0, stopped_by="condition:c1:skip",
+        )
+        rm.set_condition_eval(eval2, ctx=ctx)
+        # 最终状态应一致
+        assert rm.condition_eval is eval2
+        assert rm.stopped_by == "condition:c1:skip"
+        assert ctx.metadata["condition_eval"]["stopped_by"] == "condition:c1:skip"
+
+    def test_set_server_metrics_idempotent_replace(self):
+        """多次 set_server_metrics (merge=False) 结果一致"""
+        rm = RuntimeMetadata()
+        ctx = self._make_ctx()
+        rm.set_server_metrics({"a": 1}, ctx=ctx, merge=False)
+        rm.set_server_metrics({"a": 1}, ctx=ctx, merge=False)
+        assert rm.server_metrics == {"a": 1}
+        assert ctx.metadata["server_metrics"] == {"a": 1}
+
+    def test_set_server_metrics_idempotent_merge(self):
+        """多次 set_server_metrics (merge=True) 第二次应保留第一次结果 (key 相同 value 相同)"""
+        rm = RuntimeMetadata()
+        ctx = self._make_ctx()
+        rm.set_server_metrics({"a": 1, "b": 2}, ctx=ctx, merge=True)
+        rm.set_server_metrics({"a": 1, "b": 2}, ctx=ctx, merge=True)
+        # 合并结果应稳定
+        assert rm.server_metrics == {"a": 1, "b": 2}
+        assert ctx.metadata["server_metrics"] == {"a": 1, "b": 2}
+
+    def test_set_plan_idempotent(self):
+        """多次 set_plan 相同输入, 结果一致"""
+        rm = RuntimeMetadata()
+        ctx = self._make_ctx()
+        rm.set_plan({"success": 1, "failed": 0}, ctx=ctx)
+        rm.set_plan({"success": 1, "failed": 0}, ctx=ctx)
+        assert rm.plan == {"success": 1, "failed": 0}
+        assert ctx.metadata["plan"] == {"success": 1, "failed": 0}
+
+    def test_set_stopped_by_idempotent(self):
+        """多次 set_stopped_by 相同输入, 结果一致"""
+        rm = RuntimeMetadata()
+        ctx = self._make_ctx()
+        rm.set_stopped_by("timeout", ctx=ctx)
+        rm.set_stopped_by("timeout", ctx=ctx)
+        assert rm.stopped_by == "timeout"
+        assert ctx.metadata["stopped_by"] == "timeout"
+
+
+# ─────────────────────────────────────────────────────────────
+# TestReservedKeyConflict (T4) — 采纳 ChatGPT 9.88/10 Non-blocking
+# ─────────────────────────────────────────────────────────────
+
+class TestReservedKeyConflict:
+    """T4: reserved key 冲突规则.
+
+    明确: user plugin 写 ctx.runtime.custom["condition_eval"] 等 reserved key 时,
+    RuntimeMetadata 应当 _不_阻止, 但 _文档化_ 这种行为是有意为之 (override 用).
+    """
+
+    def test_custom_does_not_reserve_keys(self):
+        """set_custom() 不阻止 reserved key (允许 override)"""
+        rm = RuntimeMetadata()
+        # user plugin 故意写 reserved key
+        rm.set_custom("condition_eval", "override_value")
+        rm.set_custom("stopped_by", "custom_stop")
+        # 写入了 custom 命名空间 (不污染顶级字段)
+        assert rm.custom["condition_eval"] == "override_value"
+        assert rm.custom["stopped_by"] == "custom_stop"
+        # 顶级字段不变
+        assert rm.condition_eval is None
+        assert rm.stopped_by is None
+
+    def test_reserved_keys_documented(self):
+        """RUNTIME_RESERVED_KEYS 文档化所有 reserved namespace"""
+        # reserved keys 用于 built-in Stage 强类型字段
+        assert "server_metrics" in RUNTIME_RESERVED_KEYS
+        assert "condition_eval" in RUNTIME_RESERVED_KEYS
+        assert "stopped_by" in RUNTIME_RESERVED_KEYS
+        assert "plan" in RUNTIME_RESERVED_KEYS
+        # custom 是 user plugin namespace, 但它本身是 reserved 字段
+        assert "custom" in RUNTIME_RESERVED_KEYS
+
+    def test_user_plugin_can_use_custom_as_namespace_dict(self):
+        """user plugin 用 custom 作为 namespace dict (推荐)"""
+        rm = RuntimeMetadata()
+        # 第三方 Plugin 标准用法
+        rm.custom["my_plugin"] = {"trace_id": "abc", "version": "1.0"}
+        rm.custom["other_plugin"] = {"enabled": True}
+        # 验证 namespace 隔离
+        assert rm.custom["my_plugin"]["trace_id"] == "abc"
+        assert rm.custom["other_plugin"]["enabled"] is True
+        # 不同 plugin 互不干扰
+        assert len(rm.custom) == 2
