@@ -137,10 +137,27 @@ class SQLiteExecutionStore:
             self._bus = None
 
     def handle(self, event: ExecutionEvent) -> None:
-        """EventBus 回调：普通 INSERT。
+        """EventBus 回调：普通 INSERT（V1.0.3 委托给 append）。
 
         Storage Failure ≠ Execution Failure：所有 sqlite 异常被 catch，
         log 但不 re-raise（持久化失败不影响执行主流程）。
+        """
+        # V1.0.3: 委托给 append()（ExecutionStore Protocol 实现）
+        self.append(event)
+
+    def append(self, event: ExecutionEvent) -> None:
+        """V1.0.3 新增：ExecutionStore Protocol append 实现。
+
+        接受 ExecutionEvent，写入 SQLite（普通 INSERT）。
+        Storage Failure ≠ Execution Failure：所有 sqlite 异常被 catch，
+        log 但不 re-raise（持久化失败不影响执行主流程）。
+
+        Contract（来自 ExecutionStore Protocol）：
+        - MUST NOT 抛异常 (Best Effort)
+        - 失败时记录 logger.error / logger.warning
+        - 重复 event_id: warning（immutable 原则）
+
+        API Stability: Experimental
         """
         try:
             self._conn.execute(
@@ -168,7 +185,7 @@ class SQLiteExecutionStore:
         except sqlite3.DatabaseError as exc:
             # 其他 DB 错误：log 但不 re-raise（Storage Failure ≠ Execution Failure）
             _log.error(
-                "SQLiteExecutionStore insert failed event_id=%s type=%s: %s",
+                "SQLiteExecutionStore.append failed event_id=%s type=%s: %s",
                 event.event_id, event.type, exc,
             )
 

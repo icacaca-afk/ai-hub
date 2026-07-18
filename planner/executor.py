@@ -77,6 +77,8 @@ class PlanExecutor:
         pipeline: Optional[ExecutionPipeline] = None,
         quota: Any = None,
         include_retry: bool = False,
+        include_checkpoint: bool = False,
+        execution_store: Any = None,
     ):
         """
         Args:
@@ -88,6 +90,10 @@ class PlanExecutor:
             quota: QuotaManager 实例（V1.0.1 可选，传给 default_pipeline）
             include_retry: V1.0.2 新增，透传给 default_pipeline（默认 False）
                            仅在 pipeline=None 时生效
+            include_checkpoint: V1.0.3 新增，透传给 default_pipeline（默认 False）
+                                仅在 pipeline=None 时生效
+            execution_store: V1.0.3 新增：ExecutionStore Protocol 实现
+                            (include_checkpoint=True 时必传)
         """
         self.router = router
         self.planner = planner or RuleBasedPlanner()
@@ -95,8 +101,13 @@ class PlanExecutor:
         self.event_bus = event_bus
         # V1.0.1: Pipeline 替代 router.execute()（ADR-0021）
         # V1.0.2: include_retry 透传（ADR-0022）
+        # V1.0.3: include_checkpoint + execution_store 透传（ADR-0023）
         self.pipeline = pipeline or default_pipeline(
-            router, quota=quota, include_retry=include_retry
+            router,
+            quota=quota,
+            include_retry=include_retry,
+            include_checkpoint=include_checkpoint,
+            execution_store=execution_store,
         )
         self.last_plan: Optional[Plan] = None
 

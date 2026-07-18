@@ -519,13 +519,16 @@ def default_pipeline(
     quota: Any = None,
     include_metrics: bool = True,
     include_retry: bool = False,
+    include_checkpoint: bool = False,
+    execution_store: Any = None,
 ) -> ExecutionPipeline:
-    """构造 V1.0.2 默认 Pipeline。
+    """构造 V1.0.3 默认 Pipeline。
 
     默认 Stages:
         pre_bridge:  [RouteStage(router)]
         post_bridge: [MetricsStage()]  (if include_metrics)
                      [RetryStage()]     (if include_retry, 在前)
+                     [CheckpointStage()] (if include_checkpoint, 在最末)
 
     Args:
         router: Router 实例（通常是 ScoreRouter）
@@ -534,16 +537,28 @@ def default_pipeline(
         include_retry: 是否包含 RetryStage（默认 False，V1.0.2 保守默认）
                        V1.0.2 决策：测试期默认 False，避免破坏现有用户
                        用户主动开启：default_pipeline(router, quota, include_retry=True)
+        include_checkpoint: V1.0.3 新增：是否包含 CheckpointStage（默认 False）
+                           写入 ExecutionStore 的 ExecutionContext 快照
+                           V1.0.3 决策：默认 False，Checkpoint 需要 explicit 开启
+        execution_store: V1.0.3 新增：ExecutionStore Protocol 实现
+                        (include_checkpoint=True 时必传，通常是 SQLiteExecutionStore())
+                        遵循 Runtime Contract "Storage is Disposable" 原则
 
     Returns:
         ExecutionPipeline 实例
 
     API Stability: Experimental
 
-    V1.0.2 变更（ADR-0022）：
+    V1.0.2 变更（ADR-0022）:
         - 新增 include_retry 参数（默认 False）
         - post_bridge 顺序：[RetryStage, MetricsStage]（先重试，再 metrics）
         - Pipeline 主体 0 修改（仅 default_pipeline 工厂函数变化）
+
+    V1.0.3 变更（ADR-0023）:
+        - 新增 include_checkpoint + execution_store 参数
+        - post_bridge 顺序：[RetryStage, MetricsStage, CheckpointStage]
+        - Pipeline 主体 0 修改（仅 default_pipeline 工厂函数变化）
+        - 依赖 ExecutionStore 抽象（不绑定 SQLite）
     """
     pre_bridge = [RouteStage(router)]
     post_bridge: list = []
@@ -555,6 +570,16 @@ def default_pipeline(
         post_bridge.append(RetryStage())
     if include_metrics:
         post_bridge.append(MetricsStage())
+    # V1.0.3: CheckpointStage 在最末（捕获最终 bridge_result + server_metrics）
+    # Runtime Contract §9.1.2 Stage 顺序约定
+    if include_checkpoint:
+        from planner.stages.checkpoint_stage import CheckpointStage
+        if execution_store is None:
+            raise ValueError(
+                "default_pipeline(include_checkpoint=True) requires "
+                "execution_store. Pass SQLiteExecutionStore() (or any ExecutionStore impl)."
+            )
+        post_bridge.append(CheckpointStage(execution_store))
     return ExecutionPipeline(
         router=router,
         pre_bridge_stages=pre_bridge,

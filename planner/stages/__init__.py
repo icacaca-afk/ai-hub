@@ -1,10 +1,12 @@
 # AI Hub — Pipeline Stages Subpackage
 # V1.0.2: 可插拔 Stage 集合
 #
-# ADR-0022 V1.0.2: RetryStage（Pipeline 扩展性首次验证）
-# 未来 Stages (V1.0.3+):
-#   - CheckpointStage (ADR-0023)
+# V1.0.2: RetryStage (ADR-0022)
+# V1.0.3: CheckpointStage (ADR-0023)
+# 未来 Stages (V1.0.4+):
 #   - ConditionStage (ADR-0024)
+#   - TimeoutStage (V1.1)
+#   - CircuitBreakerStage (V1.2)
 #
 # 设计原则（来自 Runtime Contract §9.1）:
 #   - Stage MUST NOT 修改 ExecutionEvent
@@ -22,10 +24,18 @@ from planner.stages.retry_stage import (
     compute_backoff_delay,
     SAFE_RETRY_ERROR_PATTERNS,
 )
+from planner.stages.checkpoint_stage import (
+    CheckpointStage,
+    CheckpointSnapshot,
+)
 
 __all__ = [
+    # V1.0.2: RetryStage
     "RetryStage",
     "_default_retryable",
     "compute_backoff_delay",
     "SAFE_RETRY_ERROR_PATTERNS",
+    # V1.0.3: CheckpointStage
+    "CheckpointStage",
+    "CheckpointSnapshot",
 ]
