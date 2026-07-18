@@ -3,11 +3,15 @@
 - **里程碑**: V1.0.7
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: **Draft v2** (采纳 ChatGPT 9.2/10 Q4 additive migration，重新提交审核)
+- **状态**: **Accepted** ✅ (ChatGPT 9.85/10 APPROVED, v2 commit dd66d8e)
 - **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0022 RetryStage](0022-retry-stage.md), [ADR-0023 CheckpointStage](0023-checkpoint-stage.md), [ADR-0024 ConditionStage](0024-condition-stage.md), [ADR-0025 PipelineHooks](0025-pipeline-hooks.md), [ADR-0026 StageDescriptor](0026-stage-descriptor.md)
-- **后续**: V1.0.8 Stage Registry (V2 评估)
-- **前序 ChatGPT 路线图**: V1.0.6 代码审核 9.95/10 FINAL — "V1.0.7 推进: Runtime Metadata Schema 统一"
-- **历史**: v1 (9.2/10 NEEDS REVISION) 已被本 v2 取代。`docs/reviews/0027-adr-chatgpt-review-raw.txt` 保留 v1 审核记录。
+- **后续**: V1.0.8 Stage Registry (MUST) / V1.0.8 Metadata Access API (SHOULD)
+- **ChatGPT 审核**: v2 9.85/10 APPROVED — `docs/reviews/0027-adr-v2-chatgpt-review.md`
+- **采纳调整** (3 Critical + 1 Non-blocking):
+  - **C6**: RuntimeMetadata 成为 built-in canonical source (Runtime Contract §10 MUST)
+  - **C7**: metadata 兼容性为 write-through only (Runtime Contract §10 MUST)
+  - **N1**: Double Write 封装到 `RuntimeMetadata.set_*()` helper (Stage 不再散落双写)
+- **历史**: v1 (9.2/10 NEEDS REVISION) 已被 v2 取代
 
 > **StageDescriptor 答 "What is a Stage?" (静态元数据)**
 > **RuntimeMetadata 答 "What happened during execution?" (动态元数据)**
@@ -347,6 +351,34 @@ ctx.runtime.custom["my_plugin"] = value  # ✅ 受控 namespace
 - V1.0.9-V1.x: 继续双写
 - V2: deprecated `ctx.metadata` 写入（仅 `ctx.runtime` 强类型），但**保留**读取
 
+### 2.7 Runtime Contract MUST (采纳 ChatGPT 9.85/10)
+
+**MUST-1 (C6):** `RuntimeMetadata MUST be the canonical source for all built-in runtime state.`
+
+- built-in Stage **只**读 `ctx.runtime.*`（如 `ctx.runtime.stopped_by`）
+- `ctx.metadata["*"]` 仅作向后兼容读取
+- 避免双向同步导致的 Bug
+- 例外：Hook 仍可读 `ctx.metadata["*"]`（V1.0.x 永久支持）
+
+**MUST-2 (C7):** `metadata compatibility is write-through only.`
+
+- 双写方向明确：`runtime → metadata`（写穿，单向）
+- **不**做 `metadata → runtime` 反向同步
+- 第三方 Stage / Hook 写 `ctx.metadata["custom_key"] = value` **不会**自动同步到 `ctx.runtime`
+- 避免双向同步 Bug
+
+**MUST-3:** `RuntimeMetadata is additive and MUST NOT invalidate any existing metadata usage during V1.x.`
+
+- 任何 V1.0.x 代码 **不**允许 `ctx.metadata = RuntimeMetadata(...)`（会破坏 Hook / 第三方 Stage）
+- 任何 V1.0.x 代码 **不**允许 `ctx.runtime = ctx.metadata`（违反 additive 原则）
+- 第三方 Stage / Hook 旧风格 `ctx.metadata["k"] = v` **永远**允许
+
+**MUST-4:** `ctx.metadata support is permanent during V1.x.`
+
+- V1.x 永远 **不**emit Warning 警告 `ctx.metadata` 写入
+- V1.x 永远 **不**deprecate `ctx.metadata`
+- 真正 deprecation 在 V2 评估
+
 ---
 
 ## 3. 关键决策（v2 修订）
@@ -413,6 +445,76 @@ ctx.runtime.custom["my_plugin"] = value  # ✅ 受控 namespace
 - ✅ 旧第三方 Stage 不感知 RuntimeMetadata 类
 - ✅ 新代码读 `ctx.runtime.condition_eval` 类型安全
 - ✅ V2 评估移除双写中的 metadata 写入
+
+### 3.9 为什么 Double Write 封装到 `RuntimeMetadata.set_*()` helper？ (采纳 ChatGPT 9.85/10 N1)
+
+> "建议：不要让所有 Stage 自己 Double Write。建议抽出来。
+> 例如：ctx.runtime.set_condition_eval(...)，内部自动同步 metadata。
+> 这样以后 V2 删除 metadata 只需要改一个地方。"
+
+- ✅ **Stage 调用 helper**：`ctx.runtime.set_condition_eval(eval)` 而非散落 `ctx.runtime.condition_eval = X; ctx.metadata["condition_eval"] = X.to_dict()`
+- ✅ **内部封装双写**：`RuntimeMetadata.set_*()` 方法内自动写 runtime 属性 + 同步 metadata
+- ✅ **V2 移除兼容**：仅修改 helper 内部，Stage 调用方不变
+- ✅ **写穿单向**：helper 写 runtime → metadata (write-through)，不做反向
+
+```python
+# planner/runtime_metadata.py (实施时)
+@dataclass
+class RuntimeMetadata:
+    server_metrics: Dict[str, Any] = field(default_factory=dict)
+    condition_eval: Optional[ConditionEval] = None
+    stopped_by: Optional[str] = None
+    plan: Dict[str, int] = field(default_factory=dict)
+    custom: Dict[str, Any] = field(default_factory=dict)
+
+    def set_condition_eval(self, eval: ConditionEval, *, ctx=None) -> None:
+        """设置 condition_eval (write-through to ctx.metadata).
+
+        Stage 调用: ctx.runtime.set_condition_eval(eval, ctx=ctx)
+        内部: 写 ctx.runtime.condition_eval + 写 ctx.metadata["condition_eval"]
+        """
+        self.condition_eval = eval
+        if eval.stopped_by is not None:
+            self.stopped_by = eval.stopped_by
+        if ctx is not None:
+            # write-through to legacy metadata
+            if not hasattr(ctx, "metadata") or ctx.metadata is None:
+                ctx.metadata = {}
+            ctx.metadata["condition_eval"] = eval.to_dict()
+            if eval.stopped_by is not None:
+                ctx.metadata["stopped_by"] = eval.stopped_by
+
+    def set_server_metrics(self, metrics: Dict[str, Any], *, ctx=None) -> None:
+        """设置 server_metrics (write-through to ctx.metadata)."""
+        self.server_metrics = {**self.server_metrics, **metrics}
+        if ctx is not None:
+            if not hasattr(ctx, "metadata") or ctx.metadata is None:
+                ctx.metadata = {}
+            existing = ctx.metadata.get("server_metrics", {})
+            ctx.metadata["server_metrics"] = {**existing, **metrics}
+
+    def set_plan(self, plan: Dict[str, int], *, ctx=None) -> None:
+        """设置 plan aggregation (write-through to ctx.metadata)."""
+        self.plan = plan
+        if ctx is not None:
+            if not hasattr(ctx, "metadata") or ctx.metadata is None:
+                ctx.metadata = {}
+            ctx.metadata["plan"] = plan
+
+    def set_custom(self, key: str, value: Any) -> None:
+        """user plugin 写入 custom namespace (不写 metadata, 新 API).
+
+        第三方 Stage 写 ctx.runtime.custom["my_plugin"] = value 不走 helper。
+        helper 仅用于 built-in 字段的 write-through。
+        """
+        self.custom[key] = value
+```
+
+**关键设计：**
+- ✅ Stage 调用 `ctx.runtime.set_condition_eval(eval, ctx=ctx)` 一行
+- ✅ 内部自动写 runtime 属性 + 同步 metadata
+- ✅ V2 删除 metadata 时，只改 helper 内部实现
+- ✅ user plugin 写 `ctx.runtime.custom["x"]` 不走 helper（新 API，metadata 不需要兼容）
 
 ---
 
@@ -510,6 +612,13 @@ ctx.runtime.custom["my_plugin"] = value  # ✅ 受控 namespace
 - `test_metadata_equality` — dataclass eq
 - `test_stopped_by_top_level_not_nested` — stopped_by 顶级（非 condition_eval 子字段）
 
+### 6.1.1 Helper 方法测试 (4+, 采纳 N1)
+
+- `test_set_condition_eval_writes_runtime` — helper 写 runtime.condition_eval
+- `test_set_condition_eval_writes_metadata_via_ctx` — helper 通过 ctx 写 metadata
+- `test_set_server_metrics_merges` — helper 合并 server_metrics
+- `test_set_plan_writes_both` — helper 写 plan 双写
+
 ### 6.2 ExecutionContext 双写测试 (5+)
 
 - `test_execution_context_has_runtime_field` — ExecutionContext 新增 runtime 字段
@@ -533,10 +642,24 @@ ctx.runtime.custom["my_plugin"] = value  # ✅ 受控 namespace
 - `test_hook_legacy_dict_read_still_works` — Hook 读 `ctx.metadata["trace_id"]` 仍工作
 - `test_no_warning_emitted_for_legacy_writes` — V1.0.7 不发 warning（V2 再 deprecated）
 
-### 6.5 V1.0.x 回归测试
+### 6.5 双写一致性测试 (T1, 采纳 ChatGPT 9.85/10)
+
+- `test_runtime_to_metadata_writethrough_consistent` — helper 写 runtime → metadata 一致
+- `test_metadata_to_runtime_not_synced` — 写 metadata **不会**自动同步到 runtime（write-through only）
+- `test_no_reverse_sync_from_legacy_dict` — 第三方 Stage 写 `ctx.metadata["abc"]` 不污染 runtime
+
+### 6.6 Plugin Compatibility 测试 (T2, 采纳 ChatGPT 9.85/10)
+
+- `test_v106_third_party_plugin_works` — 模拟 V1.0.6 Plugin `ctx.metadata["abc"] = 1` Pipeline 正常
+- `test_v106_plugin_in_checkpoint_path` — 第三方 Plugin dict 写入 Checkpoint 仍能读
+- `test_v106_plugin_does_not_affect_runtime` — 第三方 Plugin dict 写入 runtime 不受影响
+- `test_mixed_v106_and_v107_stages` — 混合 V1.0.6 风格 + V1.0.7 强类型 Stage 协同
+
+### 6.7 V1.0.x 回归测试
 
 - ✅ V1.0.6 全部 32+ 测试无需修改
 - ✅ 全量 184+ 测试通过
+- ✅ 目标：V1.0.7 共 30+ 新增测试，全部通过
 
 ---
 
