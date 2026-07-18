@@ -315,12 +315,29 @@ class PipelineExecutor:
             Result：成功 / 失败 / 短路
 
         关键：
-        - 短路（ctx.result is not None）直接返回 ctx.result
-        - 正常情况从 ctx.bridge_result 组装
+        - 短路或 Stage 已设 ctx.result 时优先用 ctx.result
+        - 合并 ctx.result.artifacts 和 ctx.bridge_result.artifacts（去重保序）
+        - 正常情况从 ctx.bridge_result 派生（ctx.result 为空）
         - 异常情况（base_execute 失败）返回 failed Result
         """
         if ctx.result is not None:
-            # 已有 result（短路或 Stage 已组装）
+            # Stage 已构造 result（如 MetricsStage），保留
+            if ctx.bridge_result is not None:
+                # 合并 artifacts（bridge_result 的 artifacts 补到 result 上）
+                merged = list(ctx.result.artifacts)
+                for a in ctx.bridge_result.artifacts:
+                    if a not in merged:
+                        merged.append(a)
+                if merged == list(ctx.result.artifacts):
+                    return ctx.result
+                return Result(
+                    provider=ctx.result.provider,
+                    status=ctx.result.status,
+                    output=ctx.result.output,
+                    error=ctx.result.error,
+                    artifacts=merged,
+                    metadata=ctx.result.metadata,
+                )
             return ctx.result
 
         if ctx.bridge_result is None or ctx.provider is None:
@@ -339,7 +356,7 @@ class PipelineExecutor:
             status="success" if br.success else "failed",
             output=br.output,
             error=br.error,
-            artifacts=br.artifacts,
+            artifacts=list(br.artifacts),
             metadata={
                 "duration_ms": br.duration_ms,
                 "capabilities": ctx.task.capabilities,

@@ -1,11 +1,14 @@
 # AI Hub — Plan Executor
 # V0.9.0: 顺序执行 Plan 中的 Step，聚合结果
 #
-# 通过组合持有 Router（不继承），对每个 Step 调 router.execute(sub_task)。
-# ScoreRouter 的评分、Health 过滤、Quota 管理全部复用。
+# 通过组合持有 Router（不继承），对每个 Step 调 pipeline.run(sub_task)。
+# V1.0.1: Pipeline 取代 router.execute()（ADR-0021）
+# Pipeline 接管：metrics 提取 + future retry + future checkpoint
+# Router 退化为只读 route()，不负责 execute() 装饰
 #
 # ADR-0013: V0.9.0 只做顺序执行 + 简单聚合。DAG/并行留 V0.10+。
 # ADR-0017: V0.9.4 集成 EventBus，关键节点 emit 事件。
+# ADR-0021: V1.0.1 ExecutionPipeline as Decorator / Middleware
 #
 # 聚合规则（V0.9.1 分层 metadata，ADR-0014；V0.9.3 加 schema_version，ADR-0016）：
 #   - 全 success → success
@@ -29,6 +32,7 @@ from planner.execution_event import ExecutionEvent
 from planner.execution_metrics import ExecutionMetrics
 from planner.plan import Plan
 from planner.plan_store import PlanStore
+from planner.pipeline import ExecutionPipeline, default_pipeline
 from planner.rule_based_planner import RuleBasedPlanner
 from router.router import Router
 
@@ -50,9 +54,16 @@ class PlanExecutor:
         - event_bus 可选参数（执行时关键节点 emit ExecutionEvent）
         - EventBus 缺省时静默跳过（不报错，老 consumer 兼容）
 
+    V1.0.1 范围（ADR-0021）：
+        - pipeline 可选参数（默认用 default_pipeline(router, quota)）
+        - 内部用 pipeline.run(sub_task) 替代 router.execute(sub_task)
+        - Router 退化为只读 route()，不负责 execute() 装饰
+        - MetricsRouter 标记 @deprecated（保留向后兼容，V1.0.3 删除）
+
     未来扩展（不在此版本实现）：
         - V0.10+：消费 depends_on，做 DAG 拓扑排序 + 并行执行
         - V0.9.1+：LLM 总结（聚合 output 由 LLM 重写）
+        - V1.0.2+：RetryStage / CheckpointStage / ConditionStage
 
     API Stability: Experimental
     """
@@ -63,6 +74,8 @@ class PlanExecutor:
         planner: Optional[Planner] = None,
         plan_store: Optional[PlanStore] = None,
         event_bus: Optional[EventBus] = None,
+        pipeline: Optional[ExecutionPipeline] = None,
+        quota: Any = None,
     ):
         """
         Args:
@@ -70,11 +83,15 @@ class PlanExecutor:
             planner: Planner 实例（默认 RuleBasedPlanner）
             plan_store: PlanStore 实例（V0.9.3 可选，传入后执行完自动 save）
             event_bus: EventBus 实例（V0.9.4 可选，传入后执行时 emit 事件）
+            pipeline: ExecutionPipeline 实例（V1.0.1 可选，默认 default_pipeline(router, quota)）
+            quota: QuotaManager 实例（V1.0.1 可选，传给 default_pipeline）
         """
         self.router = router
         self.planner = planner or RuleBasedPlanner()
         self.plan_store = plan_store
         self.event_bus = event_bus
+        # V1.0.1: Pipeline 替代 router.execute()（ADR-0021）
+        self.pipeline = pipeline or default_pipeline(router, quota=quota)
         self.last_plan: Optional[Plan] = None
 
     def execute(self, task: Task) -> Result:
@@ -131,8 +148,9 @@ class PlanExecutor:
             )
 
             # V0.9.4: 计时 provider latency（ChatGPT 建议 D4：仅 Provider latency 显式记录）
+            # V1.0.1: 用 pipeline.run() 替代 router.execute()（ADR-0021）
             provider_start = time.perf_counter()
-            result = self.router.execute(sub_task)
+            result = self.pipeline.run(sub_task)
             provider_latency_ms = int((time.perf_counter() - provider_start) * 1000)
 
             step.execution_result = result

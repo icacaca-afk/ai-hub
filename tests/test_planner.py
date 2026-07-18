@@ -33,7 +33,9 @@ from planner.executor import PlanExecutor
 class FakeRouter:
     """测试用 Fake Router，不依赖真实 Provider。
 
-    按 content 关键词匹配返回预设 Result，用于隔离测试 PlanExecutor 聚合逻辑。
+    V1.0.1 起 PlanExecutor 用 pipeline.run() → router.route() 选 Provider
+    所以 FakeRouter 同时需要实现 route() 和 execute()（execute 保留向后兼容）。
+    按 content 关键词匹配返回预设 Result。
     """
 
     def __init__(self, results=None, default=None):
@@ -41,8 +43,67 @@ class FakeRouter:
         self.results = results or {}
         self.default = default
         self.calls: list[Task] = []
+        # V1.0.1: 构造 FakeProvider + FakeBridge 支持 route() 流程
+        self._provider = self._build_provider()
+
+    def _build_provider(self):
+        """构造一个 FakeProvider 让 router.route() 能返回它。"""
+        from core.bridge import FakeBridge, BridgeResult
+        from core.provider import Provider, ProviderMetadata
+
+        outer = self
+
+        class TestBridge(FakeBridge):
+            def run(self, task, **kwargs):
+                outer.calls.append(task)
+                for key, result in outer.results.items():
+                    if key in task.content:
+                        return BridgeResult(
+                            success=result.is_success,
+                            output=result.output if result.is_success else "",
+                            error=None if result.is_success else (result.error or "failed"),
+                            duration_ms=10,
+                            raw={},
+                            artifacts=list(result.artifacts),  # 保留
+                        )
+                if outer.default is not None:
+                    return BridgeResult(
+                        success=outer.default.is_success,
+                        output=outer.default.output if outer.default.is_success else "",
+                        error=None if outer.default.is_success else (outer.default.error or "failed"),
+                        duration_ms=10,
+                        raw={},
+                        artifacts=list(outer.default.artifacts),
+                    )
+                return BridgeResult(
+                    success=True,
+                    output=f"ok: {task.content}",
+                    error=None,
+                    duration_ms=10,
+                    raw={},
+                    artifacts=[],
+                )
+
+        class TestProvider(Provider):
+            metadata = ProviderMetadata(
+                name="fake", display_name="Fake", description="Test provider",
+                capabilities=["code.generate"], priority=50
+            )
+            bridge = TestBridge()
+
+            def health(self): return None  # type: ignore
+            def authenticated(self): return True
+            def quota_left(self): return -1
+            def select_bridge(self, task): return self.bridge
+
+        return TestProvider()
+
+    def route(self, task: Task) -> object:
+        """V1.0.1: RouteStage 调 router.route() 选 Provider。"""
+        return self._provider
 
     def execute(self, task: Task) -> Result:
+        """向后兼容（旧 PlanExecutor 调 router.execute()，新 PlanExecutor 不用）。"""
         self.calls.append(task)
         for key, result in self.results.items():
             if key in task.content:
