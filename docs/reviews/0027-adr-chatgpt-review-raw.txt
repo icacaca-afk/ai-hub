@@ -1,0 +1,540 @@
+﻿[2026-07-18T06:34:44.196Z] count=27 generating=false
+[2026-07-18T06:34:46.998Z] count=27 generating=false
+=== CHATGPT REPLY (full) ===
+总体评价：
+
+9.2 / 10（NEEDS REVISION，存在 1 个阻塞问题）
+
+这是目前 V1.x 系列里，我第一次建议不要直接按草案合并的 ADR。
+
+原因不是 RuntimeMetadata 的方向不对——相反，我认为它是 StageDescriptor 之后最自然的下一步——而是迁移策略存在较大的 API 兼容性风险。
+
+总评分
+维度	分数
+Architecture	9.8
+Runtime Contract	9.8
+API Stability	7.8
+Backward Compatibility	7.2
+Extensibility	10
+Testability	9.6
+Overall	9.2 / 10
+
+如果修改迁移策略，评分可以提升到 9.8~9.9。
+
+最大问题（阻塞）
+Q4：直接把
+Python
+Run
+ctx.metadata: dict
+
+改成
+
+Python
+Run
+RuntimeMetadata
+
+我不建议 V1.0.x 做。
+
+这是整个 ADR 唯一真正阻塞的问题。
+
+原因有三个。
+
+第一：它破坏了插件 API
+
+目前所有第三方 Stage 都可以：
+
+Python
+Run
+ctx.metadata["xxx"] = value
+
+改成：
+
+Python
+Run
+ctx.metadata.xxx
+
+以后，
+
+所有：
+
+Python
+Run
+ctx.metadata.get(...)
+ctx.metadata.setdefault(...)
+ctx.metadata.update(...)
+
+全部失效。
+
+这不是内部重构。
+
+这是：
+
+Public Runtime API Breaking Change
+
+第二：它破坏 Hook
+
+Hook 很可能：
+
+Python
+Run
+ctx.metadata["trace_id"]
+
+突然：
+
+不存在。
+
+第三：它让未来 Migration 更困难
+
+例如：
+
+V1.0.8
+
+增加：
+
+Python
+Run
+RegistryStage
+
+第三方插件：
+
+全部需要：
+
+Python
+Run
+if version >= ...
+
+开始分支。
+
+这是 V1.x 应该尽量避免的。
+
+我的建议（推荐方案）
+
+不要：
+
+Python
+Run
+ctx.metadata = RuntimeMetadata()
+
+而是：
+
+保持：
+
+Python
+Run
+ctx.metadata
+
+仍然存在。
+
+新增：
+
+Python
+Run
+ctx.runtime
+
+例如：
+
+Python
+Run
+ctx.runtime.condition_eval
+ctx.runtime.server_metrics
+ctx.runtime.retry
+
+这样：
+
+旧代码：
+
+Python
+Run
+ctx.metadata["abc"]
+
+完全不受影响。
+
+新代码：
+
+Python
+Run
+ctx.runtime.condition_eval
+
+逐步迁移。
+
+这是很多大型框架采用的演进方式。
+
+例如：
+
+Django
+
+SQLAlchemy
+
+FastAPI
+
+都采用：
+
+additive migration
+
+而不是：
+
+breaking migration。
+
+RuntimeMetadata 字段
+
+这一部分我基本赞同。
+
+我建议：
+
+V1.0.7 MUST
+Python
+Run
+server_metrics
+
+condition_eval
+
+stopped_by
+
+custom
+V1.1
+Python
+Run
+retry
+
+因为：
+
+现在：
+
+RetryStage
+
+根本没有真正 Metadata。
+
+V2
+Python
+Run
+experimental
+
+我不建议现在加入。
+
+原因：
+
+Reserved Field
+
+维护成本几乎为零。
+
+但是：
+
+Runtime Contract
+
+却要解释：
+
+它是什么。
+
+为什么存在。
+
+什么时候用。
+
+最后：
+
+没人用。
+
+建议：
+
+V2 真需要再加。
+
+stopped_by 提升
+
+这一点：
+
+我认为：
+
+应该提升。
+
+这是整个 ADR 我最赞同的决定。
+
+目前：
+
+condition_eval
+        │
+        ▼
+ stopped_by
+
+Checkpoint：
+
+还需要：
+
+Python
+Run
+condition_eval.get(...)
+
+这是：
+
+隐式耦合。
+
+真正应该：
+
+Runtime
+
+├── condition_eval
+└── stopped_by
+
+因为：
+
+停止原因：
+
+不是：
+
+Condition 专属。
+
+未来：
+
+可能：
+
+Retry
+
+ManualAbort
+
+Timeout
+
+Cancellation
+
+Hook
+
+都可以：
+
+stop。
+
+所以：
+
+RuntimeMetadata.stopped_by
+
+应该成为：
+
+Runtime 一级字段。
+
+这是：
+
+Architecture Improvement。
+
+dataclass vs TypedDict vs Pydantic
+
+我支持：
+
+dataclass。
+
+原因：
+
+RuntimeMetadata
+
+不是：
+
+Validation。
+
+而是：
+
+Runtime State。
+
+Pydantic：
+
+会增加：
+
+依赖
+
+校验
+
+性能成本。
+
+没有必要。
+
+TypedDict：
+
+IDE 不够友好。
+
+所以：
+
+dataclass
+
+是正确选择。
+
+custom namespace
+
+这一点：
+
+我建议：
+
+必须保留。
+
+否则：
+
+以后：
+
+所有插件：
+
+ctx.metadata["xxx"]
+
+都会：
+
+污染：
+
+Runtime。
+
+建议：
+
+RuntimeMetadata
+
+built-in
+
+custom
+
+
+严格隔离。
+
+这是长期收益最大的地方之一。
+
+retry 字段
+
+我建议：
+
+删除。
+
+等：
+
+真正：
+
+Retry Metadata
+
+设计出来。
+
+再加入。
+
+不要：
+
+提前预留：
+
+空字段。
+
+否则：
+
+Runtime Contract
+
+会越来越多：
+
+Reserved。
+
+experimental
+
+同样建议：
+
+删除。
+
+V2
+
+再加。
+
+V1.x Compatibility
+
+我建议：
+
+不要：
+
+Hard Break。
+
+推荐：
+
+两步。
+
+第一步：
+
+ctx.metadata
+
+ctx.runtime
+
+同时存在。
+
+第二步：
+
+V2
+
+再：
+
+Deprecated。
+
+这样：
+
+生态：
+
+几乎没有成本。
+
+Stage Registry
+
+这里：
+
+我认为：
+
+RuntimeMetadata
+
+不应该：
+
+告诉：
+
+Registry：
+
+Metadata Key。
+
+例如：
+
+不要：
+
+Python
+Run
+descriptor.metadata_field
+
+这是：
+
+反向依赖。
+
+Descriptor
+
+描述：
+
+Stage。
+
+Metadata
+
+描述：
+
+Runtime。
+
+两者：
+
+应该：
+
+保持：
+
+独立。
+
+Adopt / Defer
+建议	结论	优先级
+RuntimeMetadata 强类型	Adopt	Critical
+stopped_by 提升一级	Adopt	Critical
+dataclass	Adopt	Critical
+custom namespace	Adopt	Critical
+保持 metadata 不变，新增 runtime	Adopt	Critical（阻塞）
+retry 字段	Defer	V1.1
+experimental 字段	Defer	V2
+Pydantic	Defer	V2
+TypedDict	Reject	—
+V1.0.8 建议
+
+如果解决了迁移问题，我认为下一步不要再增加 Runtime 字段，而应该围绕现有基础设施完善能力：
+
+Stage Registry：建立统一的 Stage 注册与发现机制，支持第三方 Stage、能力查询和按描述符过滤，而不是让 Stage 彼此感知。
+
+Metadata Access API：为 RuntimeMetadata 提供稳定的访问辅助方法（如只读视图、命名空间访问），减少组件直接依赖具体字段。
+
+Schema Versioning：给 RuntimeMetadata 引入版本号或演进策略，为未来新增字段保留兼容空间，而不是频繁做破坏性调整。
+
+最终结论
+
+评分：9.2 / 10
+
+结论：NEEDS REVISION（存在 1 个阻塞项）
+
+我赞同 RuntimeMetadata 的方向，也赞同将 stopped_by 提升为一级运行时状态。但我不建议在 V1.0.x 将 ctx.metadata 从 dict 直接替换为 RuntimeMetadata。这会把一次内部架构优化变成公共 API 的破坏性变更。
+
+如果改为渐进式迁移（例如保留 ctx.metadata，新增强类型运行时容器并逐步迁移内置 Stage），这个 ADR 的整体质量可以提升到 9.8–9.9/10，并且更符合 V1.x 系列一直保持的 API 稳定性原则。
