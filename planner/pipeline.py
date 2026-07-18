@@ -181,6 +181,22 @@ class RouteStage:
     API Stability: Experimental
     """
 
+    # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
+    # Lazy import 避免循环依赖 (stage_descriptor 依赖 ExecutionContext)
+    from planner.stage_descriptor import StageDescriptor as _SD
+    descriptor = _SD(
+        name="route",
+        version=1,
+        role="stage",
+        capabilities=frozenset({"selects_provider"}),
+        idempotent=True,
+        has_side_effects=False,
+        always_run_after_stop=False,
+        description="Routes task to a Provider via Router",
+        owner="ai-hub",
+        experimental=False,
+    )
+
     def __init__(self, router: Router):
         self.router = router
         self._name = "route"
@@ -235,6 +251,22 @@ class MetricsStage:
 
     API Stability: Experimental
     """
+
+    # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
+    # Lazy import 避免循环依赖
+    from planner.stage_descriptor import StageDescriptor as _SD
+    descriptor = _SD(
+        name="metrics",
+        version=1,
+        role="metric",
+        capabilities=frozenset({"collects_metrics"}),
+        idempotent=True,
+        has_side_effects=False,
+        always_run_after_stop=False,
+        description="Collects per-stage metrics from BridgeResult",
+        owner="ai-hub",
+        experimental=False,
+    )
 
     def __init__(self, extractor: Any = None):
         # Lazy import 避免循环依赖
@@ -458,17 +490,20 @@ class ExecutionPipeline:
 
         # 1. Pre-bridge stages
         for stage in self.pre_bridge_stages:
+            # V1.0.6: 提取 descriptor (Hook 收到 descriptor, Backwards-compat)
+            from planner.stage_descriptor import get_descriptor as _get_desc
+            descriptor = _get_desc(stage)
             if self.hooks.enabled:
-                self.hooks.fire_before_stage(ctx, stage.name)
+                self.hooks.fire_before_stage(ctx, stage.name, descriptor=descriptor)
             try:
                 ctx = stage(ctx)
             except Exception as e:
                 # V1.0.5: Hook on_error (但仍 re-raise)
                 if self.hooks.enabled:
-                    self.hooks.fire_on_error(ctx, stage.name, e)
+                    self.hooks.fire_on_error(ctx, stage.name, e, descriptor=descriptor)
                 raise
             if self.hooks.enabled:
-                self.hooks.fire_after_stage(ctx, stage.name)
+                self.hooks.fire_after_stage(ctx, stage.name, descriptor=descriptor)
             if ctx.stop:
                 # V1.0.5: Hook on_stop
                 if self.hooks.enabled:
@@ -494,17 +529,19 @@ class ExecutionPipeline:
         # 3. Post-bridge stages
         aborted_idx = -1
         for i, stage in enumerate(self.post_bridge_stages):
+            # V1.0.6: 提取 descriptor (Hook 收到 descriptor, Backwards-compat)
+            descriptor = _get_desc(stage)
             if self.hooks.enabled:
-                self.hooks.fire_before_stage(ctx, stage.name)
+                self.hooks.fire_before_stage(ctx, stage.name, descriptor=descriptor)
             try:
                 ctx = stage(ctx)
             except Exception as e:
                 # V1.0.5: Hook on_error
                 if self.hooks.enabled:
-                    self.hooks.fire_on_error(ctx, stage.name, e)
+                    self.hooks.fire_on_error(ctx, stage.name, e, descriptor=descriptor)
                 raise
             if self.hooks.enabled:
-                self.hooks.fire_after_stage(ctx, stage.name)
+                self.hooks.fire_after_stage(ctx, stage.name, descriptor=descriptor)
             if ctx.stop:
                 aborted_idx = i
                 break
@@ -518,15 +555,24 @@ class ExecutionPipeline:
             if self.hooks.enabled:
                 self.hooks.fire_on_stop(ctx, stopped_by)
             for stage in self.post_bridge_stages[aborted_idx + 1:]:
-                # 识别 CheckpointStage (duck typing via name + store attr)
-                if stage.name == "checkpoint" and hasattr(stage, "store"):
+                # V1.0.6: 改用 descriptor.always_run_after_stop (ADR-0026 ChatGPT 9.94/10)
+                # 关键: 不再 duck typing (stage.name + hasattr(stage, "store"))
+                # Pipeline 只关心行为信号, 不关心 stage.name 字符串
+                from planner.stage_descriptor import get_descriptor
+                descriptor = get_descriptor(stage)
+                if descriptor.always_run_after_stop:
                     if self.hooks.enabled:
-                        self.hooks.fire_before_stage(ctx, stage.name)
+                        # V1.0.6: Hook 收到 descriptor (可选参数, Backwards-compat)
+                        self.hooks.fire_before_stage(
+                            ctx, stage.name, descriptor=descriptor
+                        )
                     ctx = stage(ctx)
-                    # CheckpointStage 不修改 ctx.stop, 也不设 result
+                    # Stage 不修改 ctx.stop, 也不设 result
                     # (只写存储, pass)
                     if self.hooks.enabled:
-                        self.hooks.fire_after_stage(ctx, stage.name)
+                        self.hooks.fire_after_stage(
+                            ctx, stage.name, descriptor=descriptor
+                        )
                     # V1.0.4: 即使 abort 也要写 Checkpoint
                     break
             # 然后 return

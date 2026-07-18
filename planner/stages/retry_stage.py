@@ -55,6 +55,7 @@ from typing import Callable, Optional
 
 from core.bridge import BridgeResult
 from planner.pipeline import ExecutionContext
+from planner.stage_descriptor import StageDescriptor
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,20 @@ class RetryStage:
 
     API Stability: Experimental
     """
+
+    # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
+    descriptor = StageDescriptor(
+        name="retry",
+        version=1,
+        role="retry",
+        capabilities=frozenset({"retries"}),
+        idempotent=False,  # 重试 -> 多次副作用
+        has_side_effects=True,
+        always_run_after_stop=False,
+        description="Retries failed bridge execution",
+        owner="ai-hub",
+        experimental=False,
+    )
 
     def __init__(
         self,

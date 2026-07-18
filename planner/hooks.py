@@ -49,13 +49,16 @@ BeforePipelineHook = Callable[[ExecutionContext], None]
 AfterPipelineHook = Callable[[ExecutionContext, Result], None]
 
 # Before Stage Hook (每个 Stage 前)
-BeforeStageHook = Callable[[ExecutionContext, str], None]  # (ctx, stage_name)
+# V1.0.6: 加 descriptor 可选参数 (Backwards-compat)
+# V1.0.5 旧 Hook: def before_stage(ctx, stage_name) -> None
+# V1.0.6 新 Hook: def before_stage(ctx, stage_name, descriptor=None) -> None
+BeforeStageHook = Callable[..., None]  # (ctx, stage_name, descriptor=None)
 
 # After Stage Hook (每个 Stage 后)
-AfterStageHook = Callable[[ExecutionContext, str], None]  # (ctx, stage_name)
+AfterStageHook = Callable[..., None]  # (ctx, stage_name, descriptor=None)
 
 # On Error Hook (Stage 异常时)
-OnErrorHook = Callable[[ExecutionContext, str, Exception], None]  # (ctx, stage_name, exc)
+OnErrorHook = Callable[..., None]  # (ctx, stage_name, exc, descriptor=None)
 
 # On Stop Hook (ctx.stop 触发时)
 OnStopHook = Callable[[ExecutionContext, str], None]  # (ctx, stopped_by)
@@ -142,29 +145,57 @@ class PipelineHooks:
             except Exception as e:
                 logger.warning("after_pipeline hook raised: %s", e)
 
-    def fire_before_stage(self, ctx: ExecutionContext, stage_name: str) -> None:
-        """触发 before_stage hooks (Best Effort)."""
+    def fire_before_stage(
+        self, ctx: ExecutionContext, stage_name: str, descriptor: Any = None
+    ) -> None:
+        """触发 before_stage hooks (Best Effort).
+
+        V1.0.6: descriptor 是可选参数, 旧 Hook (V1.0.5 接受 (ctx, stage_name)) 仍可工作.
+        """
         for hook in self.before_stage:
             try:
-                hook(ctx, stage_name)
+                # V1.0.6: 智能调用 — 旧 Hook 不传 descriptor, 新 Hook 收 descriptor
+                try:
+                    hook(ctx, stage_name, descriptor=descriptor)
+                except TypeError:
+                    # 旧 Hook 不接受 descriptor 参数
+                    hook(ctx, stage_name)
             except Exception as e:
                 logger.warning("before_stage hook raised: %s", e)
 
-    def fire_after_stage(self, ctx: ExecutionContext, stage_name: str) -> None:
-        """触发 after_stage hooks (Best Effort)."""
+    def fire_after_stage(
+        self, ctx: ExecutionContext, stage_name: str, descriptor: Any = None
+    ) -> None:
+        """触发 after_stage hooks (Best Effort).
+
+        V1.0.6: descriptor 是可选参数, 旧 Hook 仍可工作.
+        """
         for hook in self.after_stage:
             try:
-                hook(ctx, stage_name)
+                try:
+                    hook(ctx, stage_name, descriptor=descriptor)
+                except TypeError:
+                    hook(ctx, stage_name)
             except Exception as e:
                 logger.warning("after_stage hook raised: %s", e)
 
     def fire_on_error(
-        self, ctx: ExecutionContext, stage_name: str, exc: Exception
+        self,
+        ctx: ExecutionContext,
+        stage_name: str,
+        exc: Exception,
+        descriptor: Any = None,
     ) -> None:
-        """触发 on_error hooks (Best Effort)."""
+        """触发 on_error hooks (Best Effort).
+
+        V1.0.6: descriptor 是可选参数, 旧 Hook 仍可工作.
+        """
         for hook in self.on_error:
             try:
-                hook(ctx, stage_name, exc)
+                try:
+                    hook(ctx, stage_name, exc, descriptor=descriptor)
+                except TypeError:
+                    hook(ctx, stage_name, exc)
             except Exception as e:
                 logger.warning("on_error hook raised: %s", e)
 

@@ -55,6 +55,7 @@ from core.task import Task
 from planner.execution_event import ExecutionEvent
 from planner.execution_store import ExecutionStore
 from planner.pipeline import ExecutionContext
+from planner.stage_descriptor import StageDescriptor
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +249,21 @@ class CheckpointStage:
 
     API Stability: Experimental
     """
+
+    # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
+    # 关键字段 always_run_after_stop=True (V1.0.4 ChatGPT 9.95/10 采纳: Checkpoint 总是写, 即使 abort)
+    descriptor = StageDescriptor(
+        name="checkpoint",
+        version=1,
+        role="checkpoint",
+        capabilities=frozenset({"persists_state"}),
+        idempotent=True,
+        has_side_effects=True,         # 写 ExecutionStore
+        always_run_after_stop=True,    # V1.0.4 关键: 即使 abort 仍写
+        description="Persists execution snapshot to ExecutionStore",
+        owner="ai-hub",
+        experimental=False,
+    )
 
     def __init__(self, store: ExecutionStore):
         """构造 CheckpointStage.

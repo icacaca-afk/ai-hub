@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from planner.pipeline import ExecutionContext
+from planner.stage_descriptor import StageDescriptor
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,20 @@ class ConditionStage:
 
     API Stability: Experimental
     """
+
+    # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
+    descriptor = StageDescriptor(
+        name="condition",
+        version=1,
+        role="condition",
+        capabilities=frozenset({"controls_flow"}),
+        idempotent=True,
+        has_side_effects=False,
+        always_run_after_stop=False,
+        description="Conditional branch: continue / skip / abort",
+        owner="ai-hub",
+        experimental=False,
+    )
 
     def __init__(
         self,
