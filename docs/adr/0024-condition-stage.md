@@ -444,6 +444,12 @@ ConditionStage MUST NOT:
 - 接触 SQLiteExecutionStore / EventBus 内部 (除非显式传入)
 - 抛异常
 - 引入新的 ctx 字段
+
+ConditionStage SHOULD:
+- **避免外部可观测副作用** (ChatGPT 9.95/10 Q10 采纳)
+  - 最好: 读 Context → 返回 bool
+  - 避免: 写数据库 / 发网络 / 修改文件
+  - 否则: Replay 不可预测
 ```
 
 ---
