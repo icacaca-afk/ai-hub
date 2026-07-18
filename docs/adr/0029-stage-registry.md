@@ -3,10 +3,17 @@
 - **里程碑**: V1.0.8
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: **Draft** (待 ChatGPT 审核)
+- **状态**: **Accepted** ✅ (ChatGPT 9.93/10 APPROVED, commit a09cf7e)
 - **依赖**: [ADR-0026 StageDescriptor](0026-stage-descriptor.md) (V1.0.6 Accepted 9.95/10), [ADR-0027 RuntimeMetadata](0027-runtime-metadata-schema.md) (V1.0.7 Accepted 9.88/10), [ADR-0028 Metadata Access API](0028-metadata-access-api.md) (V1.0.8 Accepted 9.94/10)
-- **后续**: V1.0.9 Pipeline Introspection / Metadata Serialization (to_dict / from_dict)
-- **ChatGPT 路线图**: V1.0.7 代码审核 9.88/10 Q8 + V1.0.8 代码审核 9.94/10 V1.0.9 Roadmap — "MUST: Stage Registry"
+- **后续**: V1.0.9 ADR-0030 Registry Introspection (MUST ①) / ADR-0031 Metadata Serialization (MUST ②) / Pipeline Describe (SHOULD)
+- **ChatGPT 审核**: 9.93/10 APPROVED — `docs/reviews/0029-adr-chatgpt-review.md`
+- **采纳调整** (5 Non-blocking + 1 重构):
+  - **T1**: `reset_default_registry()` 测试 helper（Singleton 污染防护）
+  - **T2**: `describe(name)` 返回 StageDescriptor（CLI / Inspection 用）
+  - **Q3 重构**: `default_order()` 暴露顺序（Pipeline 不再 hardcode role 顺序）
+  - **Q5 职责分离**: ADR 明确 `clear()` 不重注册 builtins, `default_registry()` 永远负责 builtins
+  - **Q7 核心**: Registry 不感知 RuntimeMetadata（保持 V1.x 三层解耦）
+  - **Q1 范围聚焦**: 不加 `by_owner` / `by_version` / `experimental`（V1.0.8 最小 API）
 
 > **StageDescriptor 答 "What is a Stage?" (静态 metadata)**
 > **RuntimeMetadata 答 "What happened during execution?" (动态 metadata)**
@@ -274,7 +281,51 @@ class StageRegistry:
         return stage
 
     # ─────────────────────────────────────────────────────
-    # 4. 内部: 索引管理
+    # 4. T2 (采纳 ChatGPT 9.93/10): describe(name) 返回 StageDescriptor
+    # ─────────────────────────────────────────────────────
+
+    def describe(self, name: str) -> Optional[StageDescriptor]:
+        """返回 Stage 的 StageDescriptor (不返回 Stage 实例, 采纳 ChatGPT 9.93/10 T2).
+
+        Use case:
+          - CLI: `registry.describe("checkpoint")` 打印 descriptor 信息
+          - Documentation: 自动生成 Stage catalog
+          - Inspection: 调试时不需要 Stage 实例, 仅 metadata
+
+        Args:
+            name: Stage name
+
+        Returns:
+            StageDescriptor 或 None (未找到)
+        """
+        stage = self._stages.get(name)
+        if stage is None:
+            return None
+        return get_descriptor(stage)
+
+    # ─────────────────────────────────────────────────────
+    # 5. Q3 重构 (采纳 ChatGPT 9.93/10): default_order() 暴露顺序
+    # Pipeline 不再 hardcode role 顺序
+    # ─────────────────────────────────────────────────────
+
+    # V1.0.8 默认 Pipeline 顺序 (按 role)
+    # 未来 V1.0.9+ 新增 role (trace / cache / observer) 直接加这里
+    DEFAULT_ORDER: Tuple[str, ...] = ("stage", "metric", "checkpoint", "condition")
+
+    def default_order(self) -> Tuple[str, ...]:
+        """返回默认 Pipeline 构造顺序 (按 role).
+
+        未来扩展 (V1.0.9+):
+          - 加 trace / cache / observer 等新 role
+          - Pipeline 走 registry.default_order() 而非 hardcode
+
+        Returns:
+            role 元组 (e.g. ("stage", "metric", "checkpoint", "condition"))
+        """
+        return self.DEFAULT_ORDER
+
+    # ─────────────────────────────────────────────────────
+    # 6. 内部: 索引管理
     # ─────────────────────────────────────────────────────
 
     def _index(self, descriptor: StageDescriptor) -> None:
@@ -355,9 +406,30 @@ def _register_builtin_stages(registry: StageRegistry) -> None:
     registry.register(CheckpointStage())  # role="checkpoint", cap={"writes_snapshot"}
     registry.register(ConditionStage(condition=lambda c: True, on_true="continue", name="default"))  # role="condition", cap={"controls_flow"}
     registry.register(MetricsStage())  # role="metric", cap={"collects_metrics"}
-```
 
-### 2.3 Default Pipeline 工厂
+
+# T1 (采纳 ChatGPT 9.93/10): reset_default_registry() 测试 helper
+def reset_default_registry() -> None:
+    """重置 default registry (测试隔离用, 采纳 ChatGPT 9.93/10 T1).
+
+    关键不变量 (Q5 职责分离):
+      - 重置后下次 default_registry() 重新 auto-register built-in
+      - **不**在 Runtime 中调用 (会破坏 default registry 完整性)
+      - 仅用于 pytest fixture teardown
+
+    Use case:
+        @pytest.fixture
+        def clean_registry():
+            from planner.stage_registry import reset_default_registry
+            reset_default_registry()
+            yield
+            reset_default_registry()  # teardown
+    """
+    global _DEFAULT_REGISTRY
+    _DEFAULT_REGISTRY = None
+
+
+### 2.3 Default Pipeline 工厂 (Q3 重构)
 
 ```python
 # planner/stage_registry.py (继续)
@@ -382,8 +454,8 @@ def default_pipeline(*, registry: Optional[StageRegistry] = None) -> Pipeline:
         registry = default_registry()
 
     stages = []
-    # 标准顺序: route → metric → checkpoint → conditions
-    for role in ("stage", "metric", "checkpoint", "condition"):
+    # Q3 重构: 走 registry.default_order() 而非 hardcode role tuple
+    for role in registry.default_order():
         stages.extend(registry.by_role(role))
     return Pipeline(stages=stages)
 ```
