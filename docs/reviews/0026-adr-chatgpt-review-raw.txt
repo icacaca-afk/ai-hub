@@ -1,0 +1,489 @@
+﻿[2026-07-18T05:49:42.101Z] count=25 generating=false
+[2026-07-18T05:49:44.140Z] count=25 generating=false
+=== CHATGPT REPLY (full) ===
+Overall Review
+
+Score: 9.94 / 10
+
+Verdict: APPROVED (with one compatibility requirement)
+
+This ADR is the natural continuation of ADR-0021 through ADR-0025. It removes the last significant piece of string-based coupling (stage.name == "checkpoint") and replaces it with explicit metadata. That's exactly the kind of evolution expected in a runtime architecture.
+
+The only issue I consider blocking is the compatibility question around CheckpointStage (your Q7). Everything else is polish or roadmap material.
+
+Score Breakdown
+Area	Score	Notes
+Architecture	10/10	Clear separation of behavior vs metadata
+Pipeline decoupling	10/10	Removes duck typing cleanly
+Runtime evolution	10/10	Strong foundation for Stage Registry
+API stability	9.8/10	Hook signature extension is acceptable
+Compatibility	9.4/10	One migration rule required
+Future extensibility	10/10	Descriptor enables many V2 features
+
+Final:
+
+9.94 / 10
+
+Q1 Field Set
+
+Overall, the proposed fields are well balanced.
+
+I would classify them as follows.
+
+V1.0.6 Core
+
+These directly affect runtime behavior or observability.
+
+Python
+Run
+name
+role
+idempotent
+has_side_effects
+always_run_after_stop
+
+These are justified immediately.
+
+V1.x Metadata
+
+Useful but informational.
+
+Python
+Run
+description
+version
+experimental
+owner
+
+These don't influence execution but are valuable for tooling and diagnostics.
+
+V2 Metadata
+
+I would move this mentally into the "future capability" category.
+
+Python
+Run
+capabilities
+
+Not because it's wrong.
+
+Because today nothing consumes it.
+
+Leave it in the dataclass if you want forward compatibility, but don't let Runtime Contract depend on it yet.
+
+Q2 Pipeline Decoupling
+
+Current proposal:
+
+Python
+Run
+descriptor.always_run_after_stop
+
+I think this is sufficient.
+
+I would not also check:
+
+Python
+Run
+descriptor.role == "checkpoint"
+
+because that creates two sources of truth.
+
+The runtime should care about behavior, not semantic category.
+
+In other words:
+
+Don't ask:
+
+Is this a checkpoint?
+
+Ask:
+
+Should this run after stop?
+
+Behavior > taxonomy.
+
+Q3 Hook Signature
+
+Current:
+
+Python
+Run
+before_stage(
+    ctx,
+    stage_name,
+    descriptor=None
+)
+
+I think this is acceptable.
+
+I would not use:
+
+Python
+Run
+**kwargs
+
+because:
+
+loses type hints
+
+loses discoverability
+
+makes API documentation weaker
+
+Optional typed parameters are preferable.
+
+Q4 Base Class vs Protocol
+
+This is one area where I would slightly change direction.
+
+Instead of:
+
+Python
+Run
+class Stage:
+
+I would prefer:
+
+Python
+Run
+@runtime_checkable
+class Stage(Protocol):
+    descriptor: StageDescriptor
+
+    def __call__(...) -> ...
+
+Reason:
+
+Current architecture has intentionally avoided inheritance.
+
+RetryStage
+
+MetricsStage
+
+CheckpointStage
+
+ConditionStage
+
+already follow structural typing.
+
+A Protocol preserves that philosophy.
+
+A concrete base class starts nudging users toward inheritance.
+
+I don't think that's necessary.
+
+Recommendation:
+
+Use Protocol.
+
+Q5 Role String vs Enum
+
+Current:
+
+Python
+Run
+role: str
+
+I agree.
+
+Don't introduce Enum in V1.
+
+Why?
+
+Because today:
+
+Runtime never switches on role.
+
+It's documentation metadata.
+
+Enum becomes worthwhile once:
+
+Stage Registry
+
+UI
+
+Plugin loading
+
+begin consuming it.
+
+Until then:
+
+String keeps the dependency lighter.
+
+Q6 Set vs List
+
+Definitely:
+
+Python
+Run
+Set[str]
+
+Correct.
+
+Reason:
+
+Capabilities are semantic labels.
+
+Duplicate labels have no meaning.
+
+Q7 Compatibility (Critical)
+
+This is the only real issue.
+
+Current compatibility factory:
+
+Python
+Run
+StageDescriptor(name=stage.name)
+
+would indeed lose:
+
+Python
+Run
+always_run_after_stop=True
+
+for CheckpointStage.
+
+That would silently break V1.0.4 semantics.
+
+This is not acceptable.
+
+Option A
+
+Require every built-in Stage to declare:
+
+Python
+Run
+descriptor = ...
+
+I strongly recommend this.
+
+Example:
+
+Python
+Run
+class CheckpointStage:
+
+    descriptor = StageDescriptor(
+        name="checkpoint",
+        role="checkpoint",
+        always_run_after_stop=True,
+    )
+
+Likewise:
+
+RetryStage
+
+ConditionStage
+
+MetricsStage
+
+RouteStage
+
+all receive explicit descriptors.
+
+This is clean.
+
+No heuristics.
+
+Option B
+
+Factory detects:
+
+Python
+Run
+hasattr(stage,"store")
+
+Reject.
+
+That recreates duck typing.
+
+Exactly what ADR-0026 is trying to remove.
+
+Option C
+
+Migration requirement
+
+This is my recommendation.
+
+ADR should explicitly state:
+
+All built-in stages introduced before ADR-0026 MUST define an explicit descriptor during migration.
+
+Then compatibility factory exists only for:
+
+user plugins
+
+legacy extensions
+
+This preserves backward compatibility without contaminating the runtime.
+
+This is the only change I consider blocking.
+
+Q8 Tests
+
+Current:
+
+10
+
+5
+
+3
+
+is already good.
+
+I would add only two tests.
+
+Descriptor immutability
+Python
+Run
+descriptor.role = ...
+
+should fail.
+
+Compatibility fallback
+
+Legacy stage without descriptor:
+
+Python
+Run
+FakeStage
+
+should receive default descriptor.
+
+Those are enough.
+
+Property testing is unnecessary.
+
+Q9 Runtime Contract
+
+I wouldn't split:
+
+stage-descriptor.md
+
+yet.
+
+The descriptor is still tightly coupled to pipeline execution.
+
+Keep it in ADR-0026.
+
+Later:
+
+When:
+
+Registry
+
+Plugins
+
+UI
+
+appear,
+
+then extract.
+
+Q10 Runtime Metadata
+
+I actually think this should be ADR-0027.
+
+Because:
+
+StageDescriptor answers:
+
+What is a Stage?
+
+Metadata answers:
+
+What happened during execution?
+
+Different concepts.
+
+Don't mix them.
+
+Adopt / Defer
+Suggestion	Priority	Recommendation
+Explicit descriptors for all built-in stages	Critical	Adopt
+Replace optional base class with Protocol	Non-blocking	Adopt
+Keep always_run_after_stop as behavioral flag	Adopt	Yes
+Keep role as string	Adopt	Yes
+Keep capabilities as Set[str]	Adopt	Yes
+Keep optional descriptor hook parameter	Adopt	Yes
+Add immutable descriptor test	Non-blocking	Adopt
+Add legacy fallback descriptor test	Non-blocking	Adopt
+Stage Registry	Defer	V2
+Role Enum	Defer	V2
+Runtime metadata schema	Defer	ADR-0027
+Recommended Code-Level Adjustments
+1. Define descriptors explicitly
+Python
+Run
+descriptor = StageDescriptor(
+    name="checkpoint",
+    role="checkpoint",
+    always_run_after_stop=True,
+)
+
+for every built-in stage.
+
+2. Protocol
+
+Instead of
+
+Python
+Run
+class Stage:
+
+prefer
+
+Python
+Run
+class Stage(Protocol):
+3. Compatibility helper
+Python
+Run
+def get_descriptor(stage):
+
+    if hasattr(stage,"descriptor"):
+        return stage.descriptor
+
+    return StageDescriptor(
+        name=stage.name
+    )
+
+Only for third-party stages.
+
+Never infer checkpoint semantics.
+
+V1.0.7 Roadmap
+
+This ADR creates a very strong foundation.
+
+I would now avoid adding more Stage types and instead consolidate runtime metadata and stage management. A coherent next step would be:
+
+Stage Registry: central registration and lookup of StageDescriptors, enabling discovery, validation, and tooling without relying on scanning runtime objects.
+
+Runtime Metadata Schema (ADR-0027): define and version the structure of ctx.metadata (condition_eval, server_metrics, stopped_by, future tracing fields), so all stages and hooks write to a consistent contract.
+
+Descriptor Validation: add startup-time validation for descriptor uniqueness (e.g. unique name), reserved roles, and incompatible flag combinations such as always_run_after_stop=False on stages intended to execute after termination.
+
+Critical Issue Analysis (Q7)
+
+This is the only issue I would classify as blocking before merge.
+
+The migration helper:
+
+Python
+Run
+StageDescriptor(name=stage.name)
+
+cannot preserve the existing behavior of CheckpointStage, because always_run_after_stop defaults to False. That would silently change the semantics introduced in V1.0.4.
+
+The clean solution is not to make the compatibility layer smarter through heuristics (hasattr(stage, "store")), because that reintroduces the duck typing this ADR is removing.
+
+Instead, make the migration explicit:
+
+Every built-in stage defines its own descriptor.
+
+The compatibility factory is reserved exclusively for legacy or third-party stages that predate ADR-0026.
+
+That preserves V1.0.x behavior, removes string-based coupling, and keeps the architecture internally consistent. This is the one adjustment I'd require before considering ADR-0026 complete.

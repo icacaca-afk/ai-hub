@@ -3,8 +3,9 @@
 - **里程碑**: V1.0.6
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: **Draft** (待 ChatGPT 审核)
+- **状态**: **Accepted** ([ChatGPT 9.94/10 APPROVED](../reviews/0026-adr-chatgpt-review.md), 1 Critical + 2 Non-blocking 全部采纳)
 - **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0023 CheckpointStage](0023-checkpoint-stage.md), [ADR-0024 ConditionStage](0024-condition-stage.md), [ADR-0025 PipelineHooks](0025-pipeline-hooks.md)
+- **后续**: V1.0.7 ADR-0027 Runtime Metadata Schema 统一
 - **前序 ChatGPT 路线图**: V1.0.5 代码审核 9.93/10 FINAL — "V1.0.6 StageDescriptor：用统一描述对象替代基于 stage.name 的字符串约定，为未来扩展（分类、能力标签、可观测性）打基础"
 
 > **StageDescriptor = Stage 的元数据 (Metadata).**
@@ -123,19 +124,26 @@ class StageDescriptor:
     owner: str = "ai-hub"          # 维护者
 ```
 
-### 2.2 Stage 集成 Descriptor
+### 2.2 Stage 接口 (Protocol, 非继承要求)
+
+**ChatGPT 9.94/10 Q4 采纳：改 `class Stage` 基类为 `Protocol`。原因：当前架构刻意避免继承，Stage 已用 structural typing。Protocol 保留这一哲学。**
 
 ```python
-class Stage:
-    """V1.0.6: Stage 基类 (Optional — V1.0.6 提供, 但不强求继承)."""
+from typing import Protocol, runtime_checkable
 
-    descriptor: ClassVar[StageDescriptor] = StageDescriptor(name="stage")
+@runtime_checkable
+class Stage(Protocol):
+    """Stage 接口约定 (V1.0.6 Protocol, 非继承要求).
 
-    def __call__(self, ctx: ExecutionContext) -> ExecutionContext:
-        raise NotImplementedError
+    任何满足此协议的对象都是 Stage (duck typing + Protocol 验证).
+    """
+    descriptor: StageDescriptor
+
+    def __call__(self, ctx: ExecutionContext) -> ExecutionContext: ...
 
 
-class RouteStage(Stage):
+class RouteStage:
+    """V1.0.6: 不继承 Stage, 仅满足 Protocol."""
     descriptor = StageDescriptor(
         name="route",
         version=1,
@@ -150,7 +158,7 @@ class RouteStage(Stage):
         ...
 
 
-class MetricsStage(Stage):
+class MetricsStage:
     descriptor = StageDescriptor(
         name="metrics",
         version=1,
@@ -161,8 +169,11 @@ class MetricsStage(Stage):
         description="Collects per-stage metrics",
     )
 
+    def __call__(self, ctx):
+        ...
 
-class RetryStage(Stage):
+
+class RetryStage:
     descriptor = StageDescriptor(
         name="retry",
         version=1,
@@ -173,8 +184,12 @@ class RetryStage(Stage):
         description="Retries failed bridge execution",
     )
 
+    def __call__(self, ctx):
+        ...
 
-class CheckpointStage(Stage):
+
+class CheckpointStage:
+    """V1.0.6: 显式 descriptor, 关键字段 always_run_after_stop=True (V1.0.4 ChatGPT 9.95/10 采纳)."""
     descriptor = StageDescriptor(
         name="checkpoint",
         version=1,
@@ -186,9 +201,12 @@ class CheckpointStage(Stage):
         description="Persists execution snapshot to ExecutionStore",
     )
 
+    def __call__(self, ctx):
+        ...
+
 
 class ConditionStage:
-    """V1.0.6: 加 descriptor (Stage 仍可非继承)."""
+    """V1.0.6: 显式 descriptor."""
     descriptor = StageDescriptor(
         name="condition",
         version=1,
@@ -198,6 +216,9 @@ class ConditionStage:
         has_side_effects=False,
         description="Conditional branch: continue / skip / abort",
     )
+
+    def __call__(self, ctx):
+        ...
 ```
 
 ### 2.3 Pipeline.run() V1.0.6 重构
@@ -263,33 +284,45 @@ V1.0.6 引入语义角色（基于 ChatGPT 9.93/10 路线图）：
 
 未来 V2 可加：`"auth"` / `"rate_limit"` / `"cache"` / `"transform"` 等。
 
-### 2.6 兼容旧 Stage (V1.0.x 兼容)
+### 2.6 兼容旧 Stage (V1.0.x 兼容 + Critical 迁移要求)
 
-V1.0.6 仍允许 Stage 不实现 `descriptor`（保持 V1.0.5 行为）：
+**ChatGPT 9.94/10 Q7 Critical 调整：所有 built-in Stage 必须显式定义 `descriptor`。**
 
-```python
-class CustomStage:
-    """V1.0.6: 无 descriptor 的 Stage (兼容 V1.0.x)."""
-    name = "custom"  # V1.0.5 行为
+**关键问题：** 默认 `StageDescriptor(name=stage.name)` 兜底会丢 `always_run_after_stop=True`（CheckpointStage 关键字段），静默破坏 V1.0.4 语义。
 
-    def __call__(self, ctx):
-        ...
-```
-
-`Pipeline.run()` 检测：
-- 如果 Stage 有 `descriptor` 属性 → 用 Descriptor
-- 如果 Stage 只有 `name` 属性 → 用 `StageDescriptor(name=stage.name)` 默认 Descriptor
+**解决方案：**
+1. **强制迁移规则 (Critical)：** 所有 ADR-0026 之前引入的 built-in Stage 必须在 V1.0.6 实施时**显式定义 `descriptor`**。
+2. **兼容性 helper 仅给 user plugin / legacy extension。** 绝不推断 checkpoint 语义（不再 `hasattr(stage, "store")` 探测）。
+3. **不接受 Option B（hasattr duck typing）：** 那会重新引入 ADR-0026 试图消除的字符串约定。
 
 ```python
-# V1.0.6 Pipeline.run() 兼容逻辑
-def _get_descriptor(stage) -> StageDescriptor:
-    """V1.0.6: 提取 Stage 的 Descriptor, 兼容 V1.0.x Stage."""
+# V1.0.6 get_descriptor() — 仅给 user plugin / legacy
+def get_descriptor(stage) -> StageDescriptor:
+    """V1.0.6: 提取 Stage Descriptor, 兼容 V1.0.x 旧 Stage.
+
+    关键约束 (ChatGPT 9.94/10 Q7):
+      - built-in Stage 全部显式 descriptor, 此 helper 仅给:
+        * user plugin
+        * legacy extension (V1.0.5 之前用户自定义的 Stage)
+      - 绝不推断 checkpoint 语义 (不再 hasattr(stage, "store") 探测).
+      - 绝不基于 stage.name 字符串识别角色.
+    """
     if hasattr(stage, "descriptor") and isinstance(stage.descriptor, StageDescriptor):
         return stage.descriptor
-    # V1.0.x 兼容: 默认 Descriptor
     name = getattr(stage, "name", "stage")
+    # V1.0.6: 默认 Descriptor (兜底)
     return StageDescriptor(name=name)
 ```
+
+**V1.0.6 实施时的迁移清单：**
+
+| Stage | 必须显式 descriptor | 关键字段 |
+|-------|---------------------|----------|
+| `RouteStage` | ✅ | `role="stage"` |
+| `MetricsStage` | ✅ | `role="metric"` |
+| `RetryStage` | ✅ | `role="retry"`, `idempotent=False` |
+| `CheckpointStage` | ✅ | `role="checkpoint"`, **`always_run_after_stop=True`** (V1.0.4 关键) |
+| `ConditionStage` | ✅ | `role="condition"`, `idempotent=True` |
 
 ---
 
@@ -320,7 +353,7 @@ def _get_descriptor(stage) -> StageDescriptor:
 > "Checkpoint 总是写 (即使 abort)"
 > 移除 `ctx.stop` 短路
 
-V1.0.6 把这个语义显式化：`always_run_after_stop=True` 表明此 Stage 必须在 stop 路径也执行。
+V1.0.6 把这个语义显式化：`always_run_after_stop=True` 表明此 Stage 必须在 stop 路径也执行。**这是 V1.0.6 Critical 迁移要求的核心字段**（§2.6）。
 
 ### 3.5 为什么 Hook 签名只加 `descriptor` 参数而不改 stage_name？
 
@@ -394,10 +427,11 @@ V1.0.6 把这个语义显式化：`always_run_after_stop=True` 表明此 Stage �
 
 ## 6. 测试策略
 
-### 6.1 StageDescriptor 单元测试 (10+)
+### 6.1 StageDescriptor 单元测试 (12+)
 
 - `test_default_descriptor` — 默认值
-- `test_frozen` — 不可变
+- `test_frozen` — 不可变 (ChatGPT 9.94/10 Q8 采纳: `descriptor.role = ...` 抛 FrozenInstanceError)
+- `test_frozen_cannot_set_role` — 不可变 (Q8 采纳)
 - `test_equality` — dataclass eq
 - `test_hashable` — 可哈希 (Set/字典)
 - `test_capabilities_set` — capabilities 是 Set
@@ -406,6 +440,7 @@ V1.0.6 把这个语义显式化：`always_run_after_stop=True` 表明此 Stage �
 - `test_experimental_default_false` — 默认 False
 - `test_idempotent_default_true` — 默认 True
 - `test_custom_descriptor` — 自定义字段
+- `test_legacy_stage_gets_default_descriptor` — V1.0.x 旧 Stage 无 descriptor 时接收默认 Descriptor (ChatGPT 9.94/10 Q8 采纳)
 
 ### 6.2 Pipeline 集成测试 (5+)
 
@@ -447,31 +482,32 @@ V1.0.6 把这个语义显式化：`always_run_after_stop=True` 表明此 Stage �
 
 ---
 
-## 8. ChatGPT 审核请求
+## 8. ChatGPT 审核结果 (9.94/10 APPROVED)
 
-> **本 ADR 草案的关键问题 (待 ChatGPT 评审):**
->
-> 1. **StageDescriptor 字段集**：name / version / role / capabilities / idempotent / has_side_effects / always_run_after_stop / experimental / description / owner — 是否过宽或过窄？哪些 V1.0.6 必须，哪些 V2？
->
-> 2. **Pipeline 解耦深度**：用 `descriptor.always_run_after_stop` 替代 `stage.name == "checkpoint"` 是否充分？是否还要加 `descriptor.role == "checkpoint"` 二次检查？
->
-> 3. **Hook 签名扩展**：加 `descriptor: Optional[StageDescriptor] = None` 是否正确？是否应该用 `**kwargs` 避免签名膨胀？
->
-> 4. **Stage 基类选择**：本 ADR 引入 `Stage` 基类但不强求继承。是否应该用 `Protocol` 表达 Stage 接口？是否应该完全不强求 Descriptor 属性（用更智能的 `_get_descriptor` 工厂）？
->
-> 5. **`role` 字符串 vs Enum**：V1.0.6 用字符串 `role`，V2 转 Enum。是否正确？是否应直接 Enum + str？
->
-> 6. **Capabilities 集合 vs 列表**：`Set[str]` 而非 `List[str]`，避免重复。是否合理？
->
-> 7. **V1.0.x 兼容性测试**：旧 Stage 无 `descriptor` 时默认 `StageDescriptor(name=stage.name)` — 这是否会让 V1.0.4 CheckpointStage 的 `always_run_after_stop` 默认 False 而破坏 abort-after-checkpoint？
->
-> 8. **测试覆盖**：10 + 5 + 3 测试是否足够？是否需要额外的 stress test / property-based test？
->
-> 9. **Runtime Contract 同步**：§9.1 Stage Descriptor 段如何写？是否需要独立的 `docs/stage-descriptor.md`？
->
-> 10. **V1.0.7 Runtime Metadata Schema 统一** 是否应在本 ADR 一起做（避免 V1.0.6 命名空间冲突）？
+**最终评分：9.94 / 10** (Verdict: APPROVED with 1 Critical + 2 Non-blocking 全部采纳)
 
-**期望评分：9.5+/10**
+**关键采纳：**
+
+1. **Q7 Critical (采纳):** 所有 built-in Stage 必须显式定义 `descriptor`（见 §2.6 强制迁移清单）。`hasattr(stage, "store")` duck typing 被拒绝 — 那会重新引入 ADR-0026 试图消除的字符串约定。
+
+2. **Q4 Non-blocking (采纳):** 改 `class Stage` 基类为 `@runtime_checkable Protocol`（见 §2.2）。原因：当前架构刻意避免继承，Stage 已用 structural typing。
+
+3. **Q8 Non-blocking (采纳):** 加 2 项测试 — `test_frozen_cannot_set_role`（immutability）+ `test_legacy_stage_gets_default_descriptor`（legacy fallback）。
+
+**保持不变 (Q1, Q2, Q3, Q5, Q6, Q9, Q10):**
+
+- ✅ `always_run_after_stop` 单一行为信号（Q2 Behavior > taxonomy）
+- ✅ `role` 保持字符串（Q5 V2 转 Enum）
+- ✅ `capabilities` Set[str]（Q6 语义标签无重复）
+- ✅ Hook 签名加 `descriptor` 可选参数（Q3 Optional typed > **kwargs）
+- ✅ `capabilities` 保留 dataclass 但 Runtime Contract 不依赖（Q1 V2 Stage Registry 消费）
+- ✅ Runtime Contract 同步在 ADR-0026 内（Q9 Registry/Plugin/UI 出现时再拆）
+
+**V1.0.7 独立 ADR-0027 (采纳):** Runtime Metadata Schema 统一（condition_eval / server_metrics / stopped_by / future tracing）。StageDescriptor 答 "What is a Stage?"，Metadata 答 "What happened during execution?" — 不同概念。
+
+**V2 路线 (Defer):** Stage Registry / Role Enum / Descriptor Validation。
+
+完整审核记录：[docs/reviews/0026-adr-chatgpt-review.md](../reviews/0026-adr-chatgpt-review.md)。
 
 ---
 
