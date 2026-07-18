@@ -293,6 +293,26 @@ class TestResolveStopReason:
         ctx.stop = True
         assert rm.resolve_stop_reason(ctx) == "P3:metadata"
 
+    def test_resolve_with_none_ctx(self):
+        """T1 Non-blocking 采纳: ctx=None 时, 跳过优先级 3+4"""
+        rm = RuntimeMetadata()
+        rm.stopped_by = "P1:top"
+        # ctx=None 不影响优先级 1+2
+        assert rm.resolve_stop_reason(ctx=None) == "P1:top"
+
+    def test_resolve_with_none_ctx_no_stop(self):
+        """T1 Non-blocking 采纳: ctx=None 且 runtime 无 stopped_by → None"""
+        rm = RuntimeMetadata()
+        # 无 stopped_by, 无 condition_eval, 无 ctx
+        assert rm.resolve_stop_reason(ctx=None) is None
+
+    def test_resolve_with_none_ctx_skips_metadata_fallback(self):
+        """T1 Non-blocking 采纳: ctx=None 时, 跳过 metadata 兜底"""
+        rm = RuntimeMetadata()
+        # runtime 没有 stopped_by 也没有 condition_eval.stopped_by
+        # ctx=None 时不能查 metadata, 应返回 None (而非 crash)
+        assert rm.resolve_stop_reason(ctx=None) is None
+
 
 # ─────────────────────────────────────────────────────────────
 # TestResolveStoppedByAlias — V1.0.7 → V1.0.8 命名过渡

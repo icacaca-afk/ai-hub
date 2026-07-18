@@ -316,14 +316,14 @@ class RuntimeMetadata:
     # 封装 4 级优先级查找, CheckpointStage 改用此方法 (净减代码)
     # ─────────────────────────────────────────────────────────
 
-    def resolve_stop_reason(self, ctx: "ExecutionContext") -> Optional[str]:
+    def resolve_stop_reason(self, ctx: Optional["ExecutionContext"] = None) -> Optional[str]:
         """解析停止原因 (4 级优先级查找, 封装 V1.0.7 内联逻辑).
 
         优先级 (V1.0.7 行为, 封装到 RuntimeMetadata):
           1. self.stopped_by (顶级字段, V1.0.7 新 API)
           2. self.condition_eval.stopped_by (V1.0.7 强类型)
-          3. ctx.metadata["condition_eval"]["stopped_by"] (V1.0.6 dict 兼容)
-          4. ctx.stop → "stop_flag" (兜底)
+          3. ctx.metadata["condition_eval"]["stopped_by"] (V1.0.6 dict 兼容, ctx=None 时跳过)
+          4. ctx.stop → "stop_flag" (兜底, ctx=None 时跳过)
 
         未来扩展 (V1.x / V2):
           - RetryStage: 写 self.stopped_by = "retry:exhausted"
@@ -333,7 +333,8 @@ class RuntimeMetadata:
           - Manual Abort: 写 self.stopped_by = "manual:user_id"
 
         Args:
-            ctx: ExecutionContext (用于读取 metadata 兜底)
+            ctx: ExecutionContext (用于读取 metadata 兜底, 可选, 默认 None)
+                采纳 ChatGPT 9.94/10 Non-blocking: 实现已支持 None, 签名应表达出来
 
         Returns:
             stopped_by 字符串 或 None (未停止)
