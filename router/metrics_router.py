@@ -1,5 +1,6 @@
 # AI Hub — Metrics-aware Router
 # V0.9.6: 在 execute() 中额外提取 server_metrics（ADR-0019）
+# V1.0.1: @deprecated — 由 ExecutionPipeline + MetricsStage 替代（ADR-0021）
 #
 # 继承 ScoreRouter，覆盖 execute()（不改 route()）。
 # execute() 复制 Router.execute() 的主链路，仅在 bridge.run 后插入 MetricsExtractor。
@@ -9,9 +10,21 @@
 #   - MetricsRouter is a temporary compatibility layer.
 #   - V2.0 退出路径：BridgeResult raw extension（直接在 BridgeResult 上携带结构化 metrics）。
 #
-# API Stability: Experimental
+# V1.0.1 退出路径（ADR-0021 9.95/10 FINAL APPROVED）:
+#   - 选中 ExecutionPipeline as Decorator / Middleware 路径
+#   - MetricsStage 取代 MetricsRouter.execute() 装饰
+#   - MetricsRouter 保留向后兼容（V1.0.3 删除）
+#
+#   新代码应该用：
+#       from planner.pipeline import default_pipeline
+#       pipeline = default_pipeline(score_router, quota=quota)
+#       result = pipeline.run(task)
+#
+# API Stability: Deprecated（V1.0.3 删除）
 
 from __future__ import annotations
+
+import warnings
 
 from core.result import Result
 from core.task import Task
@@ -22,20 +35,41 @@ from router.score_router import ScoreRouter
 class MetricsRouter(ScoreRouter):
     """ScoreRouter 子类：在 execute() 中额外提取 server_metrics。
 
+    ⚠️ DEPRECATED since V1.0.1 (ADR-0021). Will be removed in V1.0.3.
+
     route() 完全继承 ScoreRouter，不影响路由决策。
     execute() 在 bridge.run() 之后调用 MetricsExtractor.extract()，
     把返回的 server_metrics dict 放进 Result.metadata["server_metrics"]。
 
     提取失败 / provider 不支持 → server_metrics = {}（不影响主链路）。
 
-    API Stability: Experimental
+    V1.0.1 替代方案（推荐）：
+        from planner.pipeline import default_pipeline
+        from router.score_router import ScoreRouter
+        pipeline = default_pipeline(ScoreRouter(...), quota=quota)
+        result = pipeline.run(task)
+        # MetricsStage 自动提取 server_metrics
+
+    API Stability: Deprecated
     """
 
     def execute(self, task: Task) -> Result:
         """路由并执行任务，附带 server_metrics。
 
+        ⚠️ DEPRECATED since V1.0.1 (ADR-0021). Use ExecutionPipeline + MetricsStage instead.
+
         链路：route → select_bridge → bridge.run → extract metrics → Result
         """
+        warnings.warn(
+            "MetricsRouter.execute() is deprecated since V1.0.1 (ADR-0021). "
+            "Use ExecutionPipeline + MetricsStage instead: "
+            "from planner.pipeline import default_pipeline; "
+            "pipeline = default_pipeline(router, quota=quota); "
+            "result = pipeline.run(task). "
+            "Will be removed in V1.0.3.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         provider = self.route(task)
 
         if provider is None:
