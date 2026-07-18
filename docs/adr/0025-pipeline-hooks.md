@@ -3,7 +3,7 @@
 - **里程碑**: V1.0.5
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: Proposed
+- **状态**: Accepted（[ChatGPT 9.9/10 FINAL APPROVED](../reviews/0025-adr-chatgpt-review.md)）
 - **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0022 RetryStage](0022-retry-stage.md), [ADR-0023 CheckpointStage](0023-checkpoint-stage.md), [ADR-0024 ConditionStage](0024-condition-stage.md)
 - **前序 ChatGPT 路线图**: V1.0.4 代码审核 9.95/10 FINAL — "**V1.0.5 Pipeline Hooks**（before/after），便于日志、Tracing、调试"
 
@@ -411,7 +411,18 @@ PipelineHooks MUST:
 - 在 hook 抛异常时静默 (Best Effort, logger.warning)
 - 在 Pipeline.run 主体增加 hook 调用点
 - 0 修改 Stage 行为 (仅在 Stage 前后 fire_xxx)
-- 在 hook 列表为空时跳过调用 (性能优化 is_empty())
+- 在 hook 列表为空时跳过调用 (性能优化 enabled 属性)
+- **Hooks MUST be observational and MUST NOT participate in execution semantics** (ChatGPT 9.9/10 Q3 采纳)
+- **Hook failures MUST NOT influence execution outcome** (ChatGPT 9.9/10 Q5 采纳)
+  - 即使所有 hook 都失败, Pipeline 仍应正常执行
+
+PipelineHooks SHOULD:
+- **Hooks SHOULD execute in registration order (FIFO)** (ChatGPT 9.9/10 Q10 采纳)
+  - V1.0.5 不支持 Priority
+- **Hooks SHOULD be side-effect free whenever practical** (ChatGPT 9.9/10 Q10 采纳)
+  - Tracing 可以写日志
+  - 但不要: 删文件 / 改数据库 / 发请求
+  - 原因: Runtime Replay 才稳定
 
 PipelineHooks MUST NOT:
 - 修改 ExecutionContext (V1.0.5 仅观察)
