@@ -330,7 +330,7 @@ StatisticsCollector skipped event
 | V0.9.7 | 引入 query_events() 统一查询 + StatisticsCollector Read-Only Projection（原则 C） |
 | V1.0.0 | ARCHITECTURE.md Accepted（10.0/10 FINAL）；Runtime Contract Accepted（10.0/10 FINAL） |
 | V1.0.1 | 引入 ExecutionPipeline as Decorator / Middleware（ADR-0021 9.95/10）；MetricsRouter Deprecated（V1.0.3 删除） |
-| V1.0.2 | 引入 RetryStage（ADR-0022 规划） |
+| V1.0.2 | 引入 RetryStage（[ADR-0022](adr/0022-retry-stage.md) 9.9/10 FINAL APPROVED）；Pipeline 扩展性首次验证 |
 | V1.0.3 | 引入 CheckpointStage（ADR-0023 规划）；**删除 MetricsRouter** |
 | V1.0.4 | 引入 ConditionStage（ADR-0024 规划） |
 
@@ -343,6 +343,58 @@ V1.0  MetricsStage (V1.0.1 ExecutionPipeline 引入)
             ↓
 V2.0  MetricsRouter Removed (V1.0.3 实施)
 ```
+
+### 9.1 Stage 原则（V1.0+ 扩展契约）
+
+V1.0.1 引入 ExecutionPipeline 装饰器链后，所有执行期关注点（metrics / retry / checkpoint / condition）通过 `ExecutionStage` 接口介入。本节定义 Stage 通用约束。
+
+#### 9.1.1 通用 Stage 约束（V1.0+ 生效）
+
+- Stage **MUST NOT** 修改 `ExecutionEvent`（Runtime Contract 原则 B）
+- Stage **MUST NOT** 接触 `SQLiteExecutionStore` / `EventBus`，除非显式订阅
+- Stage **MUST** 通过 `ctx.with_xxx()` 返回新 `ExecutionContext`（不可变）
+- Stage **MUST** 通过 `ctx.stop = True` 短路（V1.0.1 显式标志）
+- Stage **SHOULD** 保持 Side-Effect Minimal（V1.0.1 ChatGPT 建议，V1.0.2 强化）
+- Stage 失败 **MUST** 返回有效 `ctx`（不抛异常，不污染主链路）
+
+#### 9.1.2 Stage 顺序约定（V1.0+ 生效）
+
+默认 `post_bridge_stages` 顺序：
+
+```
+[RetryStage, MetricsStage]
+    ↓           ↓
+  先重试    再提取 metrics
+```
+
+**关键不变量**：
+- `MetricsStage` 看到的 `ctx.bridge_result` 必须是**最终**结果（含重试后）
+- 反向顺序（`[MetricsStage, RetryStage]`）会导致 metrics 反映**首次失败**而非最终结果
+- 用户可自定义 stage 列表，仅 `default_pipeline()` 给出推荐顺序
+
+#### 9.1.3 RetryStage 专属原则（V1.0.2 新增）
+
+[ADR-0022](adr/0022-retry-stage.md) 定义 RetryStage 失败重试能力。Runtime Contract 同步：
+
+- **RetryStage MUST NOT** 修改 routing 决策（`ctx.provider` / `ctx.bridge` 保持不变）
+- **RetryStage MUST** 重新调用 `ctx.bridge.run(ctx.task)` 触发重试
+- **RetryStage MUST** 用 `ctx.with_bridge_result(new_br)` 更新上下文
+- **RetryStage default `is_retryable`**: 仅网络/超时/5xx/限流（429）默认重试
+  - 不重试：4xx（除 429）、validation、permission、authentication、quota exhausted
+- **RetryStage MUST NOT** 重试永久错误（401/403/404/参数错误等）
+- **RetryStage failure**: pass（不抛异常，不污染主链路）
+- **RetryStage SHOULD** only retry idempotent bridge executions（ChatGPT 建议原则）
+- 4 种退避策略：`immediate` / `fixed` / `linear` / `exponential`（Stable API 字符串）
+
+**幂等性原则**（ChatGPT ② 建议）：
+
+> RetryStage SHOULD only retry idempotent bridge executions, or providers whose retry semantics are known to be safe.
+
+原因：部分 Provider 重试会导致重复扣费或重复创建资源。Contract 提前提示用户。
+
+**Attempt Metadata**（V1.1 评估，V1.0.2 不实施）：
+
+未来在 `Result.metadata` 增加 `retry_attempts` / `retry_delay_ms`，供 Statistics 统计 Retry 成功率。V1.0.2 不进 `ExecutionContext`，避免污染。
 
 ## 10. 不在 Runtime Contract 范围
 

@@ -1,12 +1,12 @@
 # ADR-0022: V1.0.2 — RetryStage (失败重试)
 
-- **状态**: Proposed
+- **状态**: Accepted（ChatGPT 外部审核 9.9/10 FINAL APPROVED）
 - **日期**: 2026-07-18
 - **里程碑**: V1.0.2
 - **关联**: ADR-0021（V1.0.1 ExecutionPipeline，10.0/10 FINAL APPROVED）、[Runtime Contract](../runtime-contract.md) §2 原则 F + §6 Capability Routing、[ARCHITECTURE.md §2.3](../ARCHITECTURE.md) V1.0 路线
 - **API Stability**: Experimental
 - **前序基线**: V1.0.1 ExecutionPipeline（670e84b，10.0/10 FINAL APPROVED）
-- **本版审核**: TBD（待 ChatGPT 外部审核）
+- **本版审核**: [ADR-0022 ChatGPT Review](../reviews/0022-adr-chatgpt-review.md) — 9.9/10 FINAL APPROVED
 - **ChatGPT V1.0.1 强烈建议**: "下一步直接进入 ADR-0022 RetryStage"，"不要碰 Pipeline"，"Retry 只是 class RetryStage: 即可"
 
 ## 背景
@@ -257,40 +257,85 @@ ctx.last_bridge_result: BridgeResult | None = None
 
 ### 决策 3：错误分类（is_retryable）
 
-V1.0.2 决策：**默认所有失败可重试**，允许用户自定义 `is_retryable` 函数。
+V1.0.2 决策：**默认"安全可重试"**（ChatGPT 唯一建议采纳），允许用户自定义 `is_retryable` 函数。
 
-**默认策略**：
+**默认策略**（ChatGPT Q3 采纳，9.9/10）：
+
 ```python
+# 默认安全重试策略：只重试网络/超时/限流/5xx
+SAFE_RETRY_PATTERNS = {
+    "TimeoutError",      # 网络超时
+    "ConnectionError",   # 连接失败
+    "RateLimitError",    # 限流 (429)
+    "ServiceUnavailableError",  # 5xx
+    "InternalServerError",      # 5xx
+    "BadGatewayError",          # 5xx
+    "GatewayTimeoutError",      # 5xx
+}
+
 def _default_retryable(br: BridgeResult) -> bool:
-    return not br.success  # 所有失败可重试
+    """默认安全重试：仅网络/超时/限流/5xx 错误可重试。
+    
+    LLM Provider 常见永久错误 (401/403/404/quota exhausted 等) 不重试：
+    - 401 Unauthorized: api key 无效
+    - 403 Forbidden: 权限不足
+    - 404 Not Found: model 不存在
+    - 400 Bad Request: 参数错误
+    - quota exhausted: 配额耗尽
+    - validation: 输入验证失败
+    
+    这些错误重试只是浪费时间，失败原因不会因重试恢复。
+    
+    用户可自定义 is_retryable 完全覆盖默认行为：
+        RetryStage(is_retryable=lambda br: True)  # 重试所有错误
+    """
+    if br.success:
+        return False
+    # 检查 error type
+    error_type = br.error_type or ""  # BridgeResult.error_type 字段
+    if error_type in SAFE_RETRY_PATTERNS:
+        return True
+    # 检查 status_code (raw 字段)
+    status_code = br.raw.get("status_code") if br.raw else None
+    if status_code is not None:
+        # 5xx 全部重试, 429 限流重试, 其他 4xx 不重试
+        if status_code >= 500 or status_code == 429:
+            return True
+        return False
+    # 无明确错误信息时, 不重试（保守）
+    return False
 ```
 
-**用户自定义示例**（V1.0.2+ 文档）：
+**用户自定义示例**（V1.0.2 文档）：
 
 ```python
-# 只重试 5xx + 429
+# 场景 1: 重试所有错误（不推荐生产环境）
+RetryStage(is_retryable=lambda br: not br.success)
+
+# 场景 2: 只重试 5xx + 429
 def only_5xx_and_429(br: BridgeResult) -> bool:
-    if not br.raw:
-        return True  # 无 raw 信息，默认重试
-    status = br.raw.get("status_code")
+    status = br.raw.get("status_code") if br.raw else None
     if status is None:
-        return True
+        return False  # 保守：明确无 status_code 不重试
     return status >= 500 or status == 429
 
-# 不重试 401/403 (认证问题)
-def skip_auth_errors(br: BridgeResult) -> bool:
-    if not br.raw:
-        return True
-    status = br.raw.get("status_code")
-    if status in (401, 403):
-        return False
-    return True
+# 场景 3: 自定义错误类型
+def custom_retry(br: BridgeResult) -> bool:
+    if br.success: return False
+    if "timeout" in (br.error or "").lower(): return True
+    if "rate limit" in (br.error or "").lower(): return True
+    return False
 ```
 
-**为什么是函数而不是枚举？**
+**为什么默认是函数而不是枚举？**
 - 用户可能想基于错误内容、错误码、provider 等多种条件判断
 - 函数最灵活
-- 默认实现简单
+- 默认实现采用 ChatGPT 建议的"安全可重试"策略
+
+**ChatGPT 评价**：
+> "我建议默认策略改成：Timeout / ConnectionError / 5xx / RateLimit → Retry"
+> "Validation / Permission / Authentication / 4xx → No Retry"
+> "LLM Provider 很多失败根本不会因为 Retry 而恢复（401/403/404/invalid api key/invalid model/quota exhausted）"
 
 ### 决策 4：退避策略
 
@@ -629,8 +674,12 @@ V1.0.2 通过后，需更新 `docs/runtime-contract.md`：
    V1.0.2 RetryStage:
    - RetryStage MUST NOT change routing decision
    - RetryStage SHOULD classify errors (is_retryable)
+   - RetryStage default is_retryable: only network/timeout/5xx/rate_limit
+     - 不重试: 4xx (除 429), validation, permission, authentication
+     - 用户可自定义 is_retryable 完全覆盖
    - RetryStage MUST NOT modify Provider / Bridge
    - RetryStage failure: pass (不重试/不抛异常)
+   - RetryStage SHOULD only retry idempotent bridge executions (ChatGPT 建议)
    ```
 
 3. **Stage 顺序约定**：
@@ -655,7 +704,8 @@ V1.0.2 通过后，需更新 `docs/runtime-contract.md`：
 
 ---
 
-> V1.0.2 ADR-0022 Proposed（待 ChatGPT 外部审核）。
-> 核心目标：验证 V1.0.1 Pipeline 扩展性 + 引入 RetryStage。
-> 关键约束：不改 Pipeline 主体 + Core Freeze 继续 + Runtime Contract 6 原则不变。
-> 落地后：Pipeline 扩展性验证完成，可进入 V1.0.3 CheckpointStage。
+> V1.0.2 ADR-0022 Accepted（ChatGPT 外部审核 9.9/10 FINAL APPROVED）。
+> 采纳 1 项关键调整：
+> 1. Q3 默认 is_retryable：从"所有失败可重试"改为"仅安全可重试"（ChatGPT 唯一扣分点）
+>
+> 进入实施阶段（V1.0.2 实施循环启动）。
