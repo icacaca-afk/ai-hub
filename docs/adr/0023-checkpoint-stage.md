@@ -1,11 +1,12 @@
 # ADR-0023: CheckpointStage — Pipeline 可暂停/可恢复
 
-- **里程碑**: V1.0.3
+- **里程碑**: V1.0.3 (V1.0.4 增量: aborted / stopped_by 字段)
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
 - **状态**: Accepted（[ChatGPT 9.9/10 FINAL APPROVED](../reviews/0023-adr-chatgpt-review.md)）
-- **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0022 RetryStage](0022-retry-stage.md)
+- **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0022 RetryStage](0022-retry-stage.md), [ADR-0024 ConditionStage](0024-condition-stage.md)
 - **前序 ChatGPT 路线图**: V1.0.2 代码审核 9.95/10 FINAL — "下一步：V1.0.3 CheckpointStage，**不要加入 Retry 改动**"
+- **V1.0.4 增量**: ChatGPT 9.9/10 Q4 关键采纳 — Checkpoint 总是写 (即使 abort), 增加 `aborted` / `stopped_by` 字段, 移除 `ctx.stop` 短路
 
 ---
 
@@ -464,6 +465,12 @@ def default_pipeline(
 - **CheckpointStage MUST NOT serialize** Runtime Object（Provider / Bridge / Router / ExecutionContext / Callable / File Handle）
   - 仅快照：Runtime Data（str / int / float / bool / list / dict）
 - **CheckpointStage MUST** 写 event_type="checkpoint"（与 EventBus 统一）
+- **CheckpointStage MUST** 即使 `ctx.stop=True` 也要写 Checkpoint（V1.0.4 关键采纳, ChatGPT 9.9/10 Q4）
+  - 短路条件仅 `task=None` / `bridge_result=None`
+  - 终止的 Pipeline 也是 Runtime 事实, 需要记录 status=aborted / stopped_by
+- **CheckpointStage MUST** 提取 `aborted` / `stopped_by` 字段（V1.0.4 新增）
+  - 优先从 `ctx.metadata["condition_eval"]["stopped_by"]` 提取
+  - 兜底: `ctx.stop=True` → `stopped_by="stop_flag"`
 
 **SHOULD（推荐约束）**：
 

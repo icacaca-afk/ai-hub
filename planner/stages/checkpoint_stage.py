@@ -127,6 +127,8 @@ class CheckpointSnapshot:
       - provider_name / bridge_name: Routing 决策 (name only, 不存对象)
       - bridge_result_*: BridgeResult 关键字段 (success/output/error/duration_ms/artifacts)
       - server_metrics: 提取自 Result.metadata (MetricsStage 注入)
+      - aborted: Pipeline 是否被终止 (V1.0.4 新增, ChatGPT 9.9/10 Q4 采纳)
+      - stopped_by: 终止来源 (V1.0.4 新增, e.g. "condition", "condition:skip")
       - error: 自身写快照时的错误 (Best Effort 错误捕获)
     """
 
@@ -148,6 +150,8 @@ class CheckpointSnapshot:
     bridge_result_artifacts: list
     server_metrics: dict
     snapshot_version: int = 1
+    aborted: bool = False  # V1.0.4 新增: Pipeline 是否被终止
+    stopped_by: Optional[str] = None  # V1.0.4 新增: 终止来源
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -170,6 +174,7 @@ class CheckpointSnapshot:
           - 仅提取关键字段 (不 pickle 整个 ctx)
           - bridge_name 仅存类名 (不存对象)
           - server_metrics 仅 dict 类型 (MetricsStage 注入)
+          - aborted/stopped_by 从 ctx.metadata["condition_eval"] 提取 (V1.0.4 新增)
 
         Args:
             ctx: ExecutionContext (必须有 task + bridge_result)
@@ -191,6 +196,18 @@ class CheckpointSnapshot:
             if isinstance(raw_metrics, dict):
                 server_metrics = raw_metrics
 
+        # 提取 aborted / stopped_by (V1.0.4 新增, ChatGPT 9.9/10 Q4 采纳)
+        # 优先从 ctx.metadata.condition_eval.stopped_by 提取
+        # 如果没有, 兜底为 ctx.stop (向后兼容)
+        stopped_by: Optional[str] = None
+        ctx_metadata = getattr(ctx, "metadata", None) or {}
+        condition_eval = ctx_metadata.get("condition_eval") if isinstance(ctx_metadata, dict) else None
+        if isinstance(condition_eval, dict):
+            stopped_by = condition_eval.get("stopped_by")
+        if stopped_by is None and getattr(ctx, "stop", False):
+            stopped_by = "stop_flag"
+        aborted = stopped_by is not None
+
         return cls(
             task_id=task.task_id,
             stage="checkpoint",
@@ -206,6 +223,8 @@ class CheckpointSnapshot:
             bridge_result_artifacts=_truncate_field(list(br.artifacts), "bridge_result_artifacts"),
             server_metrics=server_metrics,
             snapshot_version=cls.SNAPSHOT_VERSION,
+            aborted=aborted,
+            stopped_by=stopped_by,
             error=error,
         )
 
@@ -256,9 +275,13 @@ class CheckpointStage:
         """处理 ctx: 写快照, pass.
 
         短路条件 (直接 pass):
-          - ctx.stop = True
           - ctx.task is None
           - ctx.bridge_result is None
+
+        **不短路 ctx.stop** (V1.0.4 调整, ChatGPT 9.9/10 Q4 关键采纳):
+          - 即使 ctx.stop=True 也要写 Checkpoint
+          - 原因: Workflow 终止也是 Runtime 事实, 需要记录 status=aborted / stopped_by
+          - CheckpointSnapshot.from_context() 从 ctx.metadata.condition_eval 提取 stopped_by
 
         写失败处理 (Best Effort):
           - 构造快照失败 → logger.warning → pass
@@ -268,8 +291,9 @@ class CheckpointStage:
         Returns:
             原 ctx (Stage 不修改 ExecutionContext)
         """
-        # 短路
-        if ctx.stop or ctx.task is None or ctx.bridge_result is None:
+        # 短路: 仅 task / bridge_result 缺失时 pass
+        # (V1.0.4 调整: 移除 ctx.stop 短路, 让 Checkpoint 总是记录)
+        if ctx.task is None or ctx.bridge_result is None:
             return ctx
 
         # 构造快照

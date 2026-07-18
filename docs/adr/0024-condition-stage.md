@@ -1,11 +1,14 @@
-# ADR-0024: ConditionStage — Pipeline 条件分支 / 跳过 / 终止
+# ADR-0024: ConditionStage — Pipeline Workflow Control (Control Boundary)
 
 - **里程碑**: V1.0.4
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: Proposed
+- **状态**: Accepted（[ChatGPT 9.9/10 FINAL APPROVED](../reviews/0024-adr-chatgpt-review.md)）
 - **依赖**: [ADR-0021 ExecutionPipeline](0021-execution-pipeline.md), [ADR-0022 RetryStage](0022-retry-stage.md), [ADR-0023 CheckpointStage](0023-checkpoint-stage.md)
 - **前序 ChatGPT 路线图**: V1.0.3 代码审核 9.95/10 FINAL — "**V1.0.4 ConditionStage**, 提供 Workflow Control. 不要再扩展 Retry 或 Checkpoint"
+
+> **Condition is a control boundary, not a data boundary.**
+> Condition 是控制边界，不是数据边界。
 
 ---
 
@@ -24,9 +27,15 @@ ChatGPT 在 V1.0.3 代码审核（9.95/10）明确提出路线图：
 本 ADR 引入 **ConditionStage**，让 Pipeline 真正成为 **Workflow Runtime**：
 
 - **条件分支**：基于 ctx 字段做条件求值，决定后续 Stage 是否执行
-- **跳过（skip）**：条件不满足时跳过后续 Stage
-- **终止（abort）**：条件满足时设置 `ctx.stop = True`，终止 Pipeline
+- **跳过（skip）**：条件不满足时跳过后续 Stage（视为 Workflow 正常结束）
+- **终止（abort）**：条件满足时设置 `ctx.stop = True`，主动终止 Pipeline
 - **可观测**：Condition 求值结果写入 `ctx.metadata["condition_eval"]`（供后续 Stage 审计）
+
+> **ChatGPT 9.9/10 Q3 关键澄清**：`skip` 和 `abort` 两者实现都是 `ctx.stop = True`，但语义不同：
+> - `skip` = Workflow **正常结束**（如 "成功就跳过后续"）
+> - `abort` = Workflow **被主动终止**（如 "失败就紧急停止"）
+>
+> ConditionStage 在 metadata 中写入 `stopped_by: "condition:skip"` / `"condition:abort"` 区分两者。CheckpointStage 看到 metadata 后会写入 `aborted: true` / `stopped_by: "condition"`。
 
 ### 1.3 非目标
 
@@ -130,8 +139,10 @@ class ConditionStage:
     
     Stage 顺序 (默认):
       [RetryStage, MetricsStage, ConditionStage, CheckpointStage]
-      - Condition 在 Checkpoint 前: 终止的 Pipeline 不写 Checkpoint
+      - Condition 在 Checkpoint 前: Condition 先写 metadata
       - Condition 在 Metrics 后: 终止决策基于最终结果
+      - **Checkpoint 总是写** (ChatGPT 9.9/10 Q4 关键采纳): 即使 abort 也要写 Checkpoint,
+        记录 status=aborted / stopped_by=condition (Runtime Observability)
     """
     
     def __init__(
@@ -139,6 +150,7 @@ class ConditionStage:
         condition: Condition,
         on_true: Literal["continue", "skip", "abort"] = "continue",
         on_false: Literal["continue", "skip", "abort"] = "continue",
+        name: str = "condition",
     ):
         if condition is None:
             raise ValueError("ConditionStage requires a non-None condition")
@@ -148,7 +160,7 @@ class ConditionStage:
         self.condition = condition
         self.on_true = on_true
         self.on_false = on_false
-        self._name = "condition"
+        self._name = name  # ChatGPT 9.9/10 Q6 采纳: name 注入
     
     @property
     def name(self) -> str:
@@ -179,6 +191,7 @@ class ConditionStage:
             ctx.metadata = {}
         ctx.metadata["condition_eval"] = {
             "stage": "condition",
+            "condition_name": self._name,  # ChatGPT 9.9/10 Q6 采纳
             "result": bool(result),
             "action": action,
             "timestamp": time.time(),
@@ -264,15 +277,26 @@ class PlanExecutor:
 
 ## 4. 关键决策
 
-### 决策 #1：Stage 顺序 — Condition 在 Checkpoint 前
+### 决策 #1：Stage 顺序 — Condition 在 Checkpoint 前 + Checkpoint 总是写
 
-**理由**：
-- 终止的 Pipeline 不写 Checkpoint（避免无意义 Checkpoint）
-- Condition 在 Metrics 后（终止决策基于最终结果）
+**理由**（ChatGPT 9.9/10 Q4 关键采纳）：
+- **Checkpoint 总是写**：即使 Condition 触发 abort/skip, Checkpoint 也要写
+  - 原因：Workflow 被终止也是 Runtime 的一个事实
+  - 恢复时需要知道为什么结束
+  - 符合 Runtime Observability
+- **Condition 在 Checkpoint 前**：Condition 先写 `ctx.metadata["condition_eval"]`
+  - Checkpoint 看到 metadata 后写入 `aborted: true` / `stopped_by: "condition"`
+- **Condition 在 Metrics 后**：终止决策基于最终结果（含重试后 / metrics 注入后）
 - Stage 顺序：`[RetryStage, MetricsStage, ConditionStage, CheckpointStage]`
 
-**拒绝方案**：Condition 在 Checkpoint 后
-- 终止决策写完 Checkpoint，浪费一次 IO
+**拒绝方案**：Condition 终止时不写 Checkpoint
+- 恢复时不知道 Workflow 为何结束
+- 违反 Runtime Observability
+
+**CheckpointStage 行为调整**（V1.0.4 同步）：
+- 移除 `ctx.stop` 短路（仅短路 `task=None` / `bridge_result=None`）
+- 即使 `ctx.stop=True` 也要写 Checkpoint（记录 abort 事实）
+- CheckpointSnapshot 增加 `aborted: bool` / `stopped_by: Optional[str]` 字段
 
 ### 决策 #2：单 Condition 而非 Condition 链
 
@@ -376,7 +400,9 @@ except Exception as e:
 - `test_pipeline_with_condition_continue` — condition=True → Pipeline 完整执行
 - `test_pipeline_with_condition_abort` — condition=True, on_true="abort" → Pipeline 终止
 - `test_pipeline_with_condition_skip` — condition=True, on_true="skip" → Pipeline 终止
-- `test_pipeline_with_condition_and_checkpoint` — Condition 终止 → Checkpoint 不写
+- `test_pipeline_with_condition_and_checkpoint` — **Condition 终止 → Checkpoint 仍写**（ChatGPT 9.9/10 Q4 关键调整）
+  - CheckpointSnapshot.aborted = True
+  - CheckpointSnapshot.stopped_by = "condition"
 - `test_pipeline_with_condition_and_retry` — Retry + Condition 组合
 
 ### 6.3 边界测试 (TestConditionStageChatGPTEdgeCases)
@@ -387,6 +413,10 @@ except Exception as e:
 - `test_metadata_persists_across_stages` — condition_eval 写入后被 Checkpoint 看到
 - `test_pipeline_executor_passes_condition` — PlanExecutor 透传 condition
 - `test_default_pipeline_requires_condition` — default_pipeline(include_condition=True) 缺 condition → ValueError
+- `test_condition_name_in_metadata` — name 注入 → metadata.condition_eval.condition_name
+- `test_skip_vs_abort_stopped_by_differs` — skip 写 "condition:skip", abort 写 "condition:abort"
+- `test_condition_metadata_overwrite_on_repeat` — **ChatGPT 9.9/10 Q8 采纳**: 连续两次 Condition → metadata 覆盖（不追加）
+- `test_checkpoint_records_aborted_metadata` — **ChatGPT 9.9/10 Q8 采纳**: Condition abort → Checkpoint snapshot.aborted=True, stopped_by="condition"
 
 ---
 
@@ -405,6 +435,9 @@ ConditionStage MUST:
 - 在 condition 抛异常时视为 False (fail-closed)
 - 在 Stage 自身抛异常时返回原 ctx (Best Effort)
 - 将求值结果写入 `ctx.metadata["condition_eval"]` (供后续 Stage 看到)
+- **`condition` MUST be deterministic for the same ExecutionContext** (ChatGPT 9.9/10 Q10 采纳)
+  - 不应使用 random() / time() / network() / sleep()
+  - 否则 Checkpoint Replay 可能不一致
 
 ConditionStage MUST NOT:
 - 修改 ctx.task / ctx.bridge_result / ctx.provider
