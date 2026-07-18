@@ -1,12 +1,12 @@
 # ADR-0021: V1.0.1 — ExecutionPipeline as Decorator / Middleware
 
-- **状态**: Proposed
+- **状态**: Accepted（ChatGPT 外部审核 9.95/10 FINAL APPROVED）
 - **日期**: 2026-07-18
 - **里程碑**: V1.0.1
 - **关联**: ADR-0008（Core Freeze）、ADR-0009（HealthAwareRouter）、ADR-0011（ScoreRouter）、ADR-0019（Provider Metrics）、ADR-0020（Execution Analytics）、[Runtime Contract](../runtime-contract.md) §2 原则 F + §8 V0.9.6 临时层、[ARCHITECTURE.md §2.3](../ARCHITECTURE.md) V1.0 路线
 - **API Stability**: Experimental
 - **前序基线**: [V0.9.x → V1.0 整体收官总结](../reviews/v09x-to-v10-wrapup.md)
-- **本版审核**: TBD（待 ChatGPT 外部审核）
+- **本版审核**: [ADR-0021 ChatGPT Review](../reviews/0021-adr-chatgpt-review.md) — 9.95/10 FINAL APPROVED
 
 ## 背景
 
@@ -122,37 +122,65 @@ class ExecutionContext:
     Attributes:
         task: 当前 Task
         provider: route() 选中的 Provider（None 表示 routing 失败）
+        bridge: select_bridge() 选中的 Bridge（None 表示尚未选）
         bridge_result: bridge.run() 返回的 BridgeResult（None 表示尚未执行）
         result: 最终返回的 Result（Pipeline 末端组装）
+        stop: 短路标志。True 时 Pipeline 跳过剩余 Stage，直接返回 ctx.result。
+             （ChatGPT Q3 调整：从 ctx.result is not None 演进为显式 stop 字段）
     """
     task: Task
     provider: Provider | None = None
+    bridge: Any | None = None  # Bridge 实例（RouteStage 选定，不调 run）
     bridge_result: BridgeResult | None = None
     result: Result | None = None
+    stop: bool = False
 
-    def with_provider(self, provider: Provider | None) -> "ExecutionContext":
+    def with_provider(self, provider: Provider | None, bridge: Any | None = None) -> "ExecutionContext":
         """返回新 context（不可变原则）。"""
         return ExecutionContext(
             task=self.task,
             provider=provider,
+            bridge=bridge if bridge is not None else self.bridge,
             bridge_result=self.bridge_result,
             result=self.result,
+            stop=self.stop,
         )
 
     def with_bridge_result(self, br: BridgeResult) -> "ExecutionContext":
         return ExecutionContext(
             task=self.task,
             provider=self.provider,
+            bridge=self.bridge,
             bridge_result=br,
             result=self.result,
+            stop=self.stop,
         )
 
-    def with_result(self, result: Result) -> "ExecutionContext":
+    def with_result(self, result: Result, stop: bool = True) -> "ExecutionContext":
+        """设置 result 并标记 stop=True（除非显式 stop=False）。
+
+        Args:
+            result: 最终或中间 Result
+            stop: 是否短路（默认 True：调用 with_result 通常意味着终止）
+        """
         return ExecutionContext(
             task=self.task,
             provider=self.provider,
+            bridge=self.bridge,
             bridge_result=self.bridge_result,
             result=result,
+            stop=stop,
+        )
+
+    def with_stop(self) -> "ExecutionContext":
+        """显式设置 stop=True（不修改其他字段）。"""
+        return ExecutionContext(
+            task=self.task,
+            provider=self.provider,
+            bridge=self.bridge,
+            bridge_result=self.bridge_result,
+            result=self.result,
+            stop=True,
         )
 
 
@@ -166,8 +194,17 @@ class ExecutionStage(Protocol):
     - CheckpointStage（V1.0.3）：断点续跑
     - ...
 
-    Stage 通过修改 context（with_xxx）或短路（提前返回 Result）来介入执行链。
+    Stage 通过修改 context（with_xxx）或短路（ctx.stop = True）介入执行链。
     Stage 不修改 ExecutionEvent（Runtime Contract 原则 B）。
+
+    ChatGPT Q3 调整（采纳）：
+    短路语义不再用 `ctx.result is not None` 检测，
+    而是用显式 `ctx.stop = True` 字段。
+    原因：未来 RetryStage 可能需要区分：
+    - ctx.exception（异常）
+    - ctx.retry（重试标记）
+    - ctx.result（最终结果）
+    三个状态可能同时存在。ctx.stop 语义更明确。
     """
 
     @property
@@ -176,9 +213,9 @@ class ExecutionStage(Protocol):
     def __call__(self, ctx: ExecutionContext) -> ExecutionContext:
         """处理 context，返回新 context（不可变）。
 
-        短路语义（V1.0.1 决策点 3）：
-        - 正常：返回新 context，Pipeline 继续
-        - 短路：ctx.result is not None，Pipeline 跳过 bridge.run
+        短路语义（V1.0.1）：
+        - 正常：返回新 context（ctx.stop=False 默认），Pipeline 继续
+        - 短路：返回 ctx.with_result(result) 或 ctx.with_stop()，ctx.stop=True，Pipeline 跳过
         """
         ...
 
@@ -188,13 +225,12 @@ class ExecutionPipeline:
 
     执行流程（V1.0.1）：
         1. Pipeline.run(task) 入口
-        2. for stage in pre_bridge_stages: ctx = stage(ctx)
-        3. if ctx.result is not None: return ctx.result  # 短路
-        4. provider = ctx.provider (来自 RouteStage)
-        5. br = provider.select_bridge(task).run(task)  # Base Execute
-        6. ctx = ctx.with_bridge_result(br)
-        7. for stage in post_bridge_stages: ctx = stage(ctx)
-        8. return PipelineExecutor.assemble_result(ctx)  # 组装 Result
+        2. for stage in pre_bridge_stages: ctx = stage(ctx); if ctx.stop: break
+        3. provider / bridge = ctx.provider / ctx.bridge (来自 RouteStage)
+        4. br = bridge.run(task)  # Base Execute（仅当 ctx.stop=False 且 bridge 存在）
+        5. ctx = ctx.with_bridge_result(br)
+        6. for stage in post_bridge_stages: ctx = stage(ctx); if ctx.stop: break
+        7. return PipelineExecutor.assemble_result(ctx)  # 组装 Result
 
     Stage 注册顺序：
         pre_bridge:  [RouteStage]
@@ -207,6 +243,11 @@ class ExecutionPipeline:
     V1.0.2+ 增加:
         post_bridge: [MetricsStage(), RetryStage()]
         等
+
+    关键变更（ChatGPT Q3 采纳）：
+    - 短路检查：`ctx.stop` 字段（替代 `ctx.result is not None`）
+    - RouteStage 设置 ctx.bridge（不调 bridge.run）
+    - _base_execute 调 ctx.bridge.run()
     """
 
     def __init__(
@@ -228,13 +269,13 @@ class ExecutionPipeline:
         # 1. Pre-bridge stages
         for stage in self.pre_bridge_stages:
             ctx = stage(ctx)
-            if ctx.result is not None:
-                return ctx.result  # 短路
+            if ctx.stop:
+                return ctx.result or self._error_result(ctx, "stopped in pre_bridge")
 
-        # 2. Base execute（route + bridge.run）
+        # 2. Base execute（bridge.run）
         ctx = self._base_execute(ctx)
-        if ctx.result is not None:
-            return ctx.result  # 短路（routing/quota 失败）
+        if ctx.stop:
+            return ctx.result or self._error_result(ctx, "stopped in base_execute")
 
         # 3. Post-bridge stages
         for stage in self.post_bridge_stages:
@@ -390,7 +431,14 @@ class MetricsStage:
 
 ```python
 class RouteStage:
-    """Pre-bridge Stage：调用 router.route() 选 Provider。
+    """Pre-bridge Stage：调用 router.route() 选 Provider，再选 Bridge（不执行）。
+
+    ChatGPT Decision 3 调整（采纳）：
+    RouteStage 只负责"选择"（Provider + Bridge），不负责"执行"（bridge.run）。
+    - Router.route(task) → ctx.provider
+    - provider.select_bridge(task) → ctx.bridge
+    - bridge.run(task) → 由 Pipeline._base_execute 负责
+    原因：RouteStage 名字"Route"应只负责选择，以后 RetryStage 才容易插。
 
     让 Router 只负责 route()，不负责 execute() 装饰。
     """
@@ -400,28 +448,37 @@ class RouteStage:
         self.name = "route"
 
     def __call__(self, ctx: ExecutionContext) -> ExecutionContext:
-        """调用 router.route() 设置 ctx.provider。
+        """调用 router.route() 设置 ctx.provider，再选 ctx.bridge（不执行）。
 
         路由失败（provider is None）时短路：
         - ctx.result = failed Result
+        - ctx.stop = True
         - Pipeline 跳过 base_execute
         """
         provider = self.router.route(ctx.task)
         if provider is None:
-            return ctx.with_result(Result(
-                provider="none",
-                status="failed",
-                output="",
-                error=f"No available provider for capabilities: {ctx.task.capabilities}",
-                metadata={"capabilities": ctx.task.capabilities, "task_id": ctx.task.task_id},
-            )).with_provider(None)
-        return ctx.with_provider(provider)
+            return ctx.with_result(
+                Result(
+                    provider="none",
+                    status="failed",
+                    output="",
+                    error=f"No available provider for capabilities: {ctx.task.capabilities}",
+                    metadata={"capabilities": ctx.task.capabilities, "task_id": ctx.task.task_id},
+                ),
+                stop=True,
+            ).with_provider(None)
+
+        # ChatGPT 采纳：RouteStage 也选 bridge（不执行），存到 ctx.bridge
+        bridge = provider.select_bridge(ctx.task)
+        return ctx.with_provider(provider, bridge=bridge)
 ```
 
-**关键设计**：
+**关键设计**（ChatGPT Decision 3 采纳）：
 - Router 退化为只读 `route()`（V0.8 ScoreRouter 已有，V0.9.7 不动）
 - `Router.execute()` 仍然存在但**不再被 Pipeline 调用**（向后兼容）
-- Pipeline 用 `RouteStage` 调 `Router.route()`
+- Pipeline 用 `RouteStage` 调 `Router.route()` + `provider.select_bridge()`
+- **RouteStage 只选不执行**：bridge.run() 由 Pipeline._base_execute 负责
+- 这样 RetryStage 可以拦截"重试"，而不是重新选 provider/bridge
 
 ### 决策 4：Core Freeze 兼容性
 
@@ -854,16 +911,18 @@ V1.0.1 → V1.0.2 → V1.0.3 三个版本都是过渡期，V1.0.3 删除 Metrics
 | 旧代码未迁移到 Pipeline | V1.0.3 删除前给 2 个版本过渡期；提供迁移文档 |
 | Stage 性能（每步新建 context） | V1.0.x Stage 数量 <5，性能影响可忽略；V1.1+ 评估对象池 |
 
-## 确认问题（发 ChatGPT 审核）
+## 确认问题（ChatGPT 审核回复）
 
-1. **ExecutionContext 不可变性**：`with_xxx` 每次返回新对象。是否合理？还是应该用 mutable context + Stage 内部复制？（V1.0.1 倾向不可变：与 ExecutionEvent 不可变原则一致）
-2. **Stage 接口设计**：`__call__(ctx) -> ctx` Protocol 模式。是否合理？还是应该用抽象基类（ABC）？还是显式 `process(ctx)` 方法？
-3. **短路语义**：`ctx.result is not None` 表示短路。是否合理？还是应该用显式 `StopPipeline` exception？或 `ctx.short_circuit: bool` 字段？
-4. **MetricsStage 取代 MetricsRouter**：V1.0.1 引入 Stage + 标记 MetricsRouter Deprecated，V1.0.3 删除。是否合理？还是应该 V1.0.1 直接删除 MetricsRouter（一步到位）？
-5. **Router.execute() 保留**：`Router.execute()` 不被 Pipeline 调用但仍存在。是否合理？还是应该 V1.0.1 直接删除 `Router.execute()`（强制迁移）？
-6. **Pipeline 默认同步**：`ExecutionPipeline.run(task)` 同步执行。V1.0.x 不做异步。是否合理？还是应该 V1.0.1 引入 `async def run`？
-7. **Pipeline 不持久化**：Pipeline 状态在内存，Checkpoint 持久化推迟到 V1.0.3。是否合理？还是应该 V1.0.1 Pipeline 一起做持久化？
-8. **Scope 克制**：V1.0.1 只做 Pipeline + MetricsStage，不做 Retry / Checkpoint（推迟到 V1.0.2 / V1.0.3）。是否合理？是否应该 V1.0.1 一次性把 V1.0.x 的 4 个 Stage 都做掉？
+> **审核结论**：9.95/10 FINAL APPROVED。详细回复见 [0021-adr-chatgpt-review.md](../reviews/0021-adr-chatgpt-review.md)
+
+1. **ExecutionContext 不可变性** ✅ 采纳 — ChatGPT 支持（与 ExecutionEvent Immutable 保持一致）
+2. **Stage 接口设计** ✅ 采纳 Protocol — 不要 ABC（Stage 本质就是 callable(ctx) -> ctx）
+3. **短路语义** ✅ **采纳调整** — `ctx.result is not None` → 显式 `ctx.stop: bool` 字段（为 Retry/Condition 留状态空间）
+4. **MetricsStage 取代 MetricsRouter** ✅ 采纳 2 版本过渡 — V1.0.1 deprecated → V1.0.2 warning → V1.0.3 remove
+5. **Router.execute() 保留** ✅ 采纳保留 — 不删除（CLI/测试/第三方 Provider 依赖）
+6. **Pipeline 默认同步** ✅ 采纳同步 — 不要 async（Runtime Contract 全部同步）
+7. **Pipeline 不持久化** ✅ 采纳不持久化 — Checkpoint 由 CheckpointStage 负责
+8. **Scope 克制** ✅ 采纳克制 — 保持 0021 Pipeline → 0022 Retry → 0023 Checkpoint → 0024 Condition 节奏
 
 ## 后续路线
 
@@ -905,7 +964,20 @@ V1.0.1 通过后，需更新 `docs/runtime-contract.md`：
    - 原文："不写死具体实现"
    - 改为："V1.0.1 选择 ExecutionPipeline as Decorator / Middleware 路径。MetricsRouter 临时层由 MetricsStage 取代。"
 
-3. **§9 版本演进表新增**：
+3. **§9 版本演进表新增**（ChatGPT Decision 8 调整：完整 V0.9 → V1.0 → V2.0 Migration）：
+
+   **MetricsRouter 迁移路径**（ChatGPT Decision 8 采纳）：
+
+   ```
+   V0.9  MetricsRouter
+              ↓
+   V1.0  MetricsStage（ExecutionPipeline 引入）
+              ↓
+   V2.0  MetricsRouter Removed
+   ```
+
+   **完整版本演进表**：
+
    ```
    | V1.0.1 | 引入 ExecutionPipeline as Decorator；MetricsRouter Deprecated |
    | V1.0.2 | 引入 RetryStage |
@@ -938,7 +1010,10 @@ V1.0.1 通过后，需更新 `docs/runtime-contract.md`：
 
 ---
 
-> V1.0.1 ADR-0021 Proposed（待 ChatGPT 外部审核）。
-> 核心目标：让 Router 重新变瘦，所有执行期关注点走 ExecutionPipeline 装饰器链。
-> 关键约束：Core Freeze 继续 + Runtime Contract 6 原则不变 + metadata.schema_version 维持 "1"。
-> 落地后：V0.9.6 MetricsRouter 临时层正式进入退出路径（V1.0.3 删除）。
+> V1.0.1 ADR-0021 Accepted（ChatGPT 外部审核 9.95/10 FINAL APPROVED）。
+> 采纳 3 项非阻塞调整：
+> 1. Q3 短路语义改进：`ctx.result is not None` → 显式 `ctx.stop: bool` 字段
+> 2. Decision 3 RouteStage 职责：只选 Provider/Bridge，不执行 bridge.run
+> 3. Decision 8 Version Evolution 表：完整 V0.9 → V1.0 → V2.0 MetricsRouter Migration
+>
+> 进入实施阶段（V1.0.1 实施循环启动）。

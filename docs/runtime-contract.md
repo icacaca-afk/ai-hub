@@ -139,7 +139,8 @@ PlanExecutor
 ExecutionEvent.data
 ```
 
-**V2.0 退出路径**：MetricsRouter 应被 BridgeResult raw extension 或 ExecutionPipeline Decorator 替代。
+**V1.0.1 退出路径（采纳）**：MetricsRouter 标记 @deprecated，由 ExecutionPipeline 的 MetricsStage 替代（见 [ADR-0021](adr/0021-execution-pipeline.md)）。
+**V1.0.3 删除**：MetricsRouter 正式删除。
 
 ## 3. EventBus 保证
 
@@ -307,8 +308,17 @@ StatisticsCollector skipped event
 - 解决 Core Freeze 下"无法在 Router.execute() 加 server_metrics"
 - **MetricsRouter is transitional**（ChatGPT Q5 措辞调整）
 - **Server metrics extraction should migrate into future runtime infrastructure**
-- 不写死具体实现（Pipeline / Middleware / Interceptor / Execution Runtime 都是候选）
-- V2.0 退出时由具体 V1.0 实施决定
+- **V1.0.1 实施决定**（[ADR-0021](adr/0021-execution-pipeline.md)，9.95/10 FINAL APPROVED）：
+  - 选择 **ExecutionPipeline as Decorator / Middleware** 路径
+  - `MetricsStage` 取代 MetricsRouter.execute() 装饰
+  - MetricsRouter 标记 @deprecated（V1.0.3 删除）
+
+**V1.0.1 ExecutionPipeline 抽象**（[ADR-0021](adr/0021-execution-pipeline.md)）：
+
+- `ExecutionContext` 不可变（`with_xxx` 每次返回新对象）
+- Stage 通过 Protocol 接口 `__call__(ctx) -> ctx` 介入
+- 短路语义：`ctx.stop: bool` 字段（显式标志，替代 `ctx.result is not None`）
+- `ExecutionPipeline.run(task)` 是 V1.0+ 标准执行入口
 
 ## 9. 版本演进
 
@@ -318,7 +328,21 @@ StatisticsCollector skipped event
 | V0.9.5 | 引入 SQLiteExecutionStore（独立 Consumer） |
 | V0.9.6 | 引入 ExecutionMetrics / server_metrics 分层（原则 F） |
 | V0.9.7 | 引入 query_events() 统一查询 + StatisticsCollector Read-Only Projection（原则 C） |
-| V1.0 | Workflow Runtime on ExecutionEvent（Condition / Retry / Checkpoint / Resume 都是 Event） |
+| V1.0.0 | ARCHITECTURE.md Accepted（10.0/10 FINAL）；Runtime Contract Accepted（10.0/10 FINAL） |
+| V1.0.1 | 引入 ExecutionPipeline as Decorator / Middleware（ADR-0021 9.95/10）；MetricsRouter Deprecated（V1.0.3 删除） |
+| V1.0.2 | 引入 RetryStage（ADR-0022 规划） |
+| V1.0.3 | 引入 CheckpointStage（ADR-0023 规划）；**删除 MetricsRouter** |
+| V1.0.4 | 引入 ConditionStage（ADR-0024 规划） |
+
+**MetricsRouter 迁移路径**（ADR-0021 采纳）：
+
+```
+V0.9  MetricsRouter (V0.9.6 临时层引入)
+            ↓
+V1.0  MetricsStage (V1.0.1 ExecutionPipeline 引入)
+            ↓
+V2.0  MetricsRouter Removed (V1.0.3 实施)
+```
 
 ## 10. 不在 Runtime Contract 范围
 
