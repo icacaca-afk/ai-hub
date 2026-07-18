@@ -224,14 +224,21 @@ class ConditionStage:
             # 实际 ExecutionContext 不是 frozen, 所以可以直接 setattr
             ctx.metadata = {}
 
-        ctx.metadata["condition_eval"] = ConditionEval(
-            stage="condition",
-            condition_name=self._name,
-            result=result,
-            action=action,
-            timestamp=time.time(),
-            stopped_by=stopped_by,
-        ).to_dict()
+        # V1.0.7 (ADR-0027 Accepted 9.85/10): 强类型 + 双写 (helper.set_condition_eval)
+        # 写 ctx.runtime.condition_eval (新) + ctx.runtime.stopped_by 顶级 (新)
+        # 同时通过 helper write-through 写 ctx.metadata["condition_eval"] (旧 API, 兼容)
+        # 关键: helper 内部完成双写, Stage 不散落双写逻辑 (ChatGPT 9.85/10 N1 采纳)
+        ctx.runtime.set_condition_eval(
+            ConditionEval(
+                stage="condition",
+                condition_name=self._name,
+                result=result,
+                action=action,
+                timestamp=time.time(),
+                stopped_by=stopped_by,
+            ),
+            ctx=ctx,
+        )
 
         # 4. 执行动作
         if action in ("skip", "abort"):

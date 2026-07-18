@@ -26,13 +26,14 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, runtime_checkable
 
 from core.bridge import BridgeResult
 from core.provider import Provider
 from core.result import Result
 from core.task import Task
+from planner.runtime_metadata import RuntimeMetadata
 from planner.stage_descriptor import StageDescriptor, get_descriptor
 from router.router import Router
 
@@ -55,6 +56,9 @@ class ExecutionContext:
         result: 最终或中间 Result（短路时由 Stage 设置）
         stop: 短路标志。True 时 Pipeline 跳过剩余 Stage，直接返回 ctx.result。
              （ChatGPT Q3 调整：从 ctx.result is not None 演进为显式 stop 字段）
+        runtime: V1.0.7 新增 (ADR-0027 Accepted 9.85/10) — 强类型运行时元数据容器。
+                与 ctx.metadata (V1.0.6 dict API) 并存, 互不影响。
+                built-in Stage 通过 runtime.set_*() helper 写穿到 ctx.metadata。
 
     API Stability: Experimental
     """
@@ -65,6 +69,9 @@ class ExecutionContext:
     bridge_result: Optional[BridgeResult] = None
     result: Optional[Result] = None
     stop: bool = False
+    # V1.0.7 新增 (ADR-0027 additive migration):
+    # 保留 ctx.metadata 动态注入 (V1.0.6 行为), 第三方 Stage 旧风格不受影响
+    runtime: RuntimeMetadata = field(default_factory=RuntimeMetadata)
 
     def with_provider(
         self, provider: Optional[Provider], bridge: Any = None
@@ -75,25 +82,34 @@ class ExecutionContext:
             provider: 新的 Provider
             bridge: 新的 Bridge（None 表示保持当前 bridge）
         """
-        return ExecutionContext(
+        new_ctx = ExecutionContext(
             task=self.task,
             provider=provider,
             bridge=bridge if bridge is not None else self.bridge,
             bridge_result=self.bridge_result,
             result=self.result,
             stop=self.stop,
+            runtime=self.runtime,  # V1.0.7 透传 runtime
         )
+        # V1.0.6 兼容: 透传 metadata (动态注入)
+        if hasattr(self, "metadata") and self.metadata is not None:
+            new_ctx.metadata = self.metadata
+        return new_ctx
 
     def with_bridge_result(self, br: BridgeResult) -> "ExecutionContext":
         """返回新 context，更新 bridge_result。"""
-        return ExecutionContext(
+        new_ctx = ExecutionContext(
             task=self.task,
             provider=self.provider,
             bridge=self.bridge,
             bridge_result=br,
             result=self.result,
             stop=self.stop,
+            runtime=self.runtime,  # V1.0.7 透传 runtime
         )
+        if hasattr(self, "metadata") and self.metadata is not None:
+            new_ctx.metadata = self.metadata
+        return new_ctx
 
     def with_result(self, result: Result, stop: bool = True) -> "ExecutionContext":
         """返回新 context，设置 result 并标记 stop（默认 True）。
@@ -102,25 +118,33 @@ class ExecutionContext:
             result: 最终或中间 Result
             stop: 是否短路（默认 True：调用 with_result 通常意味着终止）
         """
-        return ExecutionContext(
+        new_ctx = ExecutionContext(
             task=self.task,
             provider=self.provider,
             bridge=self.bridge,
             bridge_result=self.bridge_result,
             result=result,
             stop=stop,
+            runtime=self.runtime,  # V1.0.7 透传 runtime
         )
+        if hasattr(self, "metadata") and self.metadata is not None:
+            new_ctx.metadata = self.metadata
+        return new_ctx
 
     def with_stop(self) -> "ExecutionContext":
         """返回新 context，显式设置 stop=True（不修改其他字段）。"""
-        return ExecutionContext(
+        new_ctx = ExecutionContext(
             task=self.task,
             provider=self.provider,
             bridge=self.bridge,
             bridge_result=self.bridge_result,
             result=self.result,
             stop=True,
+            runtime=self.runtime,  # V1.0.7 透传 runtime
         )
+        if hasattr(self, "metadata") and self.metadata is not None:
+            new_ctx.metadata = self.metadata
+        return new_ctx
 
 
 # ─────────────────────────────────────────────────────────────
@@ -280,6 +304,11 @@ class MetricsStage:
     def __call__(self, ctx: ExecutionContext) -> ExecutionContext:
         """从 ctx.bridge_result 提取 server_metrics 并写入 ctx.result.metadata。
 
+        V1.0.7 (ADR-0027): 强类型 + 双写 (helper.set_server_metrics)
+          - 写 ctx.runtime.server_metrics (新 API, 强类型)
+          - 写 ctx.metadata["server_metrics"] (旧 API, V1.0.6 兼容, 通过 helper write-through)
+          - 写 ctx.result.metadata["server_metrics"] (Result API, 已存在, 保留)
+
         短路条件：
         - ctx.stop = True（已被前面 Stage 短路）
         - ctx.bridge_result is None（base_execute 失败）
@@ -304,6 +333,10 @@ class MetricsStage:
                 provider_name, type(e).__name__, str(e),
             )
             server_metrics = {}
+
+        # V1.0.7 (ADR-0027 Accepted 9.85/10): 强类型 + 双写
+        # 写 ctx.runtime.server_metrics (新) + ctx.metadata["server_metrics"] (旧, 兼容)
+        ctx.runtime.set_server_metrics(server_metrics, ctx=ctx, merge=False)
 
         # 构造新 Result（包含 server_metrics）
         # 如果 ctx.result 已有（比如用户手动 set），合并 metadata；否则构造默认

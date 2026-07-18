@@ -291,23 +291,53 @@ class CheckpointStage:
 
 ### 2.4 PlanExecutor 集成
 
-```python
-class PlanExecutor:
-    def _aggregate_results(self, task_results):
-        return {
-            "success": sum(1 for r in task_results if r.is_success),
-            "failed": sum(1 for r in task_results if not r.is_success),
-            "total": len(task_results),
-        }
+**重要事实 (V1.0.6 行为):** PlanExecutor 的 `plan` 聚合信息**实际写入** `aggregated.metadata["plan"]` (Result.metadata)，**不**写入 `ctx.metadata["plan"]`。PlanExecutor 不在 Pipeline 链中，它聚合多个 sub_task 的 Result 到单个 aggregated Result。
 
-    def execute(self, plan):
-        ...
-        aggregated = ...
-        # V1.0.7 v2: 双写 plan
-        aggregated.runtime.plan = self._aggregate_results(results)
-        aggregated.metadata["plan"] = self._aggregate_results(results)
-        return aggregated
+```python
+# V1.0.7 实施决策: PlanExecutor **不**改 Result.metadata["plan"] (V1.0.6 行为保留)
+# 原因:
+#   - aggregated 是 Result 实例, 不是 ExecutionContext
+#   - Result 没有 runtime 字段
+#   - V1.0.6 行为: aggregated.metadata["plan"] = {success, failed, steps, status}
+#   - V1.0.7 行为: 完全相同 (向后兼容)
+#
+# RuntimeMetadata.plan 字段保留定义 (供未来 single-task 聚合 / V2 Stage 使用)
+# 但 V1.0.7 PlanExecutor 不写 ctx.runtime.plan (因为它不在 Pipeline 链)
+
+class PlanExecutor:
+    def _aggregate(self, plan, original_task):
+        # V0.9.0+: 顺序执行 + 简单聚合
+        # V1.0.7: 行为完全不变 (V1.0.6 Result.metadata["plan"] 保留)
+        return Result(
+            provider="planner",
+            status=result_status,
+            output=combined_output,
+            error="; ".join(errors) if errors else None,
+            artifacts=combined_artifacts,
+            metadata={
+                "plan_id": plan.plan_id,
+                "task_id": original_task.task_id,
+                "plan": {  # ← 保留, V1.0.7 不变
+                    "status": plan.status,
+                    "steps": total,
+                    "success": success_count,
+                    "failed": failed_count,
+                },
+                "runtime": {...},
+                "aggregate_metrics": plan.aggregate_metrics.to_dict(),
+                "schema_version": "1",
+            },
+        )
 ```
+
+**V1.0.7 关键决策:**
+- ✅ PlanExecutor **不**改 (零改动, 减少风险面)
+- ✅ `aggregated.metadata["plan"]` 保留 V1.0.6 行为 (第三方 / EventBus consumer 不受影响)
+- ✅ `RuntimeMetadata.plan` 字段**保留**定义 (供 V1.0.8+ Stage / V2 single-task 聚合)
+- ✅ RuntimeMetadata.plan 字段在 V1.0.7 默认空 `{}` (未被 PlanExecutor 写入)
+- ❌ **不**让 PlanExecutor 创建总 ExecutionContext 写 ctx.runtime.plan (过度设计)
+
+**V2 评估:** 如果需要"plan 强类型访问"，在 V2 引入 `PlanResult` 概念，将 `aggregated.metadata["plan"]` 升级为 `aggregated.plan: PlanAggregation` (类似 RuntimeMetadata 升级)。
 
 ### 2.5 V1.x reserved namespaces（Runtime Contract §10）
 

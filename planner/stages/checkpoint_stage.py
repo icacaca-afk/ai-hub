@@ -190,24 +190,38 @@ class CheckpointSnapshot:
         provider = ctx.provider
         bridge = ctx.bridge
 
-        # 提取 server_metrics (从 result 优先, 否则空 dict)
-        server_metrics: dict = {}
-        if ctx.result is not None and isinstance(ctx.result.metadata, dict):
-            raw_metrics = ctx.result.metadata.get("server_metrics", {})
-            if isinstance(raw_metrics, dict):
-                server_metrics = raw_metrics
-
         # 提取 aborted / stopped_by (V1.0.4 新增, ChatGPT 9.9/10 Q4 采纳)
-        # 优先从 ctx.metadata.condition_eval.stopped_by 提取
-        # 如果没有, 兜底为 ctx.stop (向后兼容)
+        # V1.0.7 (ADR-0027 Accepted 9.85/10): 强类型优先, dict 兜底
+        # 优先从 ctx.runtime.stopped_by 顶级字段提取 (新 API, ChatGPT 9.2/10 关键采纳)
+        # 否则从 ctx.runtime.condition_eval.stopped_by 提取 (V1.0.7 强类型)
+        # 否则从 ctx.metadata["condition_eval"]["stopped_by"] 兜底 (V1.0.6 dict 兼容)
+        # 最后从 ctx.stop 兜底为 "stop_flag"
         stopped_by: Optional[str] = None
-        ctx_metadata = getattr(ctx, "metadata", None) or {}
-        condition_eval = ctx_metadata.get("condition_eval") if isinstance(ctx_metadata, dict) else None
-        if isinstance(condition_eval, dict):
-            stopped_by = condition_eval.get("stopped_by")
+        ctx_runtime = getattr(ctx, "runtime", None)
+        if ctx_runtime is not None:
+            if ctx_runtime.stopped_by is not None:
+                stopped_by = ctx_runtime.stopped_by
+            elif ctx_runtime.condition_eval is not None:
+                stopped_by = ctx_runtime.condition_eval.stopped_by
+        if stopped_by is None:
+            ctx_metadata = getattr(ctx, "metadata", None) or {}
+            condition_eval = ctx_metadata.get("condition_eval") if isinstance(ctx_metadata, dict) else None
+            if isinstance(condition_eval, dict):
+                stopped_by = condition_eval.get("stopped_by")
         if stopped_by is None and getattr(ctx, "stop", False):
             stopped_by = "stop_flag"
         aborted = stopped_by is not None
+
+        # 提取 server_metrics (V1.0.7: 优先 ctx.runtime.server_metrics, 兜底 Result.metadata)
+        # V1.0.6 行为: 仅从 ctx.result.metadata.get("server_metrics") 读
+        # V1.0.7 增强: 优先从 ctx.runtime.server_metrics 读 (新强类型 API)
+        server_metrics: dict = {}
+        if ctx_runtime is not None and ctx_runtime.server_metrics:
+            server_metrics = dict(ctx_runtime.server_metrics)
+        elif ctx.result is not None and isinstance(ctx.result.metadata, dict):
+            raw_metrics = ctx.result.metadata.get("server_metrics", {})
+            if isinstance(raw_metrics, dict):
+                server_metrics = raw_metrics
 
         return cls(
             task_id=task.task_id,
