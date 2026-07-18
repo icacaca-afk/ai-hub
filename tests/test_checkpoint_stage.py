@@ -577,6 +577,108 @@ class TestCheckpointStageChatGPTEdgeCases:
         assert snap2.timestamp == snap.timestamp
 
 
+# ── TestCheckpointStageV104Aborted (4, V1.0.4 ChatGPT 9.9/10 Q4 采纳) ──
+
+class TestCheckpointStageV104Aborted:
+    """V1.0.4 增量: CheckpointStage 总是写 (即使 abort), 记录 aborted/stopped_by.
+
+    ChatGPT 9.9/10 Q4 关键采纳:
+      - 移除 ctx.stop 短路 (V1.0.3 行为)
+      - 增加 aborted: bool / stopped_by: Optional[str] 字段
+      - 即使 abort 也要写 Checkpoint (Runtime Observability)
+    """
+
+    def _make_ctx_with_condition_eval(self, task_id, stopped_by=None, stop=False):
+        """构造带 condition_eval metadata 的 ctx."""
+        bridge = FakeBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        ctx = ExecutionContext(
+            task=make_task(task_id=task_id),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_success_br(),
+            stop=stop,
+        )
+        if stopped_by is not None:
+            ctx.metadata = {
+                "condition_eval": {
+                    "stage": "condition",
+                    "condition_name": "test",
+                    "result": True,
+                    "action": "abort",
+                    "stopped_by": stopped_by,
+                    "timestamp": 1234567890.0,
+                }
+            }
+        return ctx
+
+    def test_aborted_field_written_from_condition_eval(self):
+        """condition_eval.stopped_by 存在 -> snapshot.aborted=True, stopped_by=condition eval 值."""
+        store = InMemoryStore()
+        stage = CheckpointStage(store=store)
+        ctx = self._make_ctx_with_condition_eval(
+            "ck-aborted", stopped_by="condition:on_failure:abort"
+        )
+        stage(ctx)
+        events = store.query_events(plan_id="ck-aborted")
+        assert len(events) == 1
+        assert events[0].data["aborted"] is True
+        assert events[0].data["stopped_by"] == "condition:on_failure:abort"
+
+    def test_aborted_false_when_no_condition_eval(self):
+        """无 condition_eval -> snapshot.aborted=False, stopped_by=None."""
+        store = InMemoryStore()
+        stage = CheckpointStage(store=store)
+        bridge = FakeBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        ctx = ExecutionContext(
+            task=make_task(task_id="ck-normal"),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_success_br(),
+        )
+        stage(ctx)
+        events = store.query_events(plan_id="ck-normal")
+        assert len(events) == 1
+        assert events[0].data["aborted"] is False
+        assert events[0].data["stopped_by"] is None
+
+    def test_checkpoint_written_even_when_ctx_stop(self):
+        """V1.0.4 关键: ctx.stop=True 但 task/bridge_result 存在 -> 仍写 Checkpoint."""
+        store = InMemoryStore()
+        stage = CheckpointStage(store=store)
+        ctx = self._make_ctx_with_condition_eval(
+            "ck-stopped", stopped_by="condition:on_failure:abort", stop=True
+        )
+        new_ctx = stage(ctx)
+        # 关键: 即使 ctx.stop=True, 仍写 Checkpoint
+        assert new_ctx is ctx
+        events = store.query_events(plan_id="ck-stopped")
+        assert len(events) == 1
+        assert events[0].data["aborted"] is True
+        assert events[0].data["stopped_by"] == "condition:on_failure:abort"
+
+    def test_stopped_by_fallback_to_stop_flag(self):
+        """ctx.stop=True 但无 condition_eval -> stopped_by='stop_flag' (兜底)."""
+        store = InMemoryStore()
+        stage = CheckpointStage(store=store)
+        bridge = FakeBridge()
+        provider = FakeProvider("p1", bridge=bridge)
+        ctx = ExecutionContext(
+            task=make_task(task_id="ck-fallback"),
+            provider=provider,
+            bridge=bridge,
+            bridge_result=make_success_br(),
+            stop=True,  # 没 condition_eval
+        )
+        stage(ctx)
+        events = store.query_events(plan_id="ck-fallback")
+        assert len(events) == 1
+        # 兜底: stop_flag
+        assert events[0].data["aborted"] is True
+        assert events[0].data["stopped_by"] == "stop_flag"
+
+
 # ── Test Fixtures: In-Memory ExecutionStore ──
 
 class InMemoryStore(ExecutionStore):

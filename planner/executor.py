@@ -77,6 +77,11 @@ class PlanExecutor:
         pipeline: Optional[ExecutionPipeline] = None,
         quota: Any = None,
         include_retry: bool = False,
+        include_condition: bool = False,
+        condition: Any = None,
+        condition_on_true: str = "continue",
+        condition_on_false: str = "continue",
+        condition_name: str = "condition",
         include_checkpoint: bool = False,
         execution_store: Any = None,
     ):
@@ -90,6 +95,13 @@ class PlanExecutor:
             quota: QuotaManager 实例（V1.0.1 可选，传给 default_pipeline）
             include_retry: V1.0.2 新增，透传给 default_pipeline（默认 False）
                            仅在 pipeline=None 时生效
+            include_condition: V1.0.4 新增，透传给 default_pipeline（默认 False）
+                              仅在 pipeline=None 时生效
+            condition: V1.0.4 新增，Callable[[ExecutionContext], bool] 条件
+                      (include_condition=True 时必传)
+            condition_on_true: V1.0.4 新增，condition=True 时的动作
+            condition_on_false: V1.0.4 新增，condition=False 时的动作
+            condition_name: V1.0.4 新增，ConditionStage 名称（用于 metadata 调试）
             include_checkpoint: V1.0.3 新增，透传给 default_pipeline（默认 False）
                                 仅在 pipeline=None 时生效
             execution_store: V1.0.3 新增：ExecutionStore Protocol 实现
@@ -102,10 +114,16 @@ class PlanExecutor:
         # V1.0.1: Pipeline 替代 router.execute()（ADR-0021）
         # V1.0.2: include_retry 透传（ADR-0022）
         # V1.0.3: include_checkpoint + execution_store 透传（ADR-0023）
+        # V1.0.4: include_condition + condition + ... 透传（ADR-0024）
         self.pipeline = pipeline or default_pipeline(
             router,
             quota=quota,
             include_retry=include_retry,
+            include_condition=include_condition,
+            condition=condition,
+            condition_on_true=condition_on_true,
+            condition_on_false=condition_on_false,
+            condition_name=condition_name,
             include_checkpoint=include_checkpoint,
             execution_store=execution_store,
         )

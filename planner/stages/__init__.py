@@ -3,8 +3,8 @@
 #
 # V1.0.2: RetryStage (ADR-0022)
 # V1.0.3: CheckpointStage (ADR-0023)
-# 未来 Stages (V1.0.4+):
-#   - ConditionStage (ADR-0024)
+# V1.0.4: ConditionStage (ADR-0024)
+# 未来 Stages (V1.1+):
 #   - TimeoutStage (V1.1)
 #   - CircuitBreakerStage (V1.2)
 #
@@ -28,6 +28,12 @@ from planner.stages.checkpoint_stage import (
     CheckpointStage,
     CheckpointSnapshot,
 )
+from planner.stages.condition_stage import (
+    ConditionStage,
+    ConditionEval,
+    Condition,
+    VALID_ACTIONS,
+)
 
 __all__ = [
     # V1.0.2: RetryStage
@@ -38,4 +44,9 @@ __all__ = [
     # V1.0.3: CheckpointStage
     "CheckpointStage",
     "CheckpointSnapshot",
+    # V1.0.4: ConditionStage
+    "ConditionStage",
+    "ConditionEval",
+    "Condition",
+    "VALID_ACTIONS",
 ]

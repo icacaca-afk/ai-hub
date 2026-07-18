@@ -416,7 +416,23 @@ class ExecutionPipeline:
         self.quota = quota
 
     def run(self, task: Task) -> Result:
-        """执行 task 经过所有 Stage，返回 Result。"""
+        """执行 task 经过所有 Stage，返回 Result。
+
+        V1.0.4 关键变更 (ChatGPT 9.9/10 Q4 采纳):
+          - 如果 ctx.stop=True (由 ConditionStage 等控制 Stage 触发),
+            仍执行剩余的 CheckpointStage (记录 abort 事实, Runtime Observability)
+          - 然后再 return (不抛异常, Best Effort)
+
+        执行流程:
+            1. Pipeline.run(task) 入口
+            2. for stage in pre_bridge_stages: ctx = stage(ctx); if ctx.stop: break
+            3. provider / bridge = ctx.provider / ctx.bridge (来自 RouteStage)
+            4. br = bridge.run(task)  # Base Execute
+            5. ctx = ctx.with_bridge_result(br)
+            6. for stage in post_bridge_stages: ctx = stage(ctx); if ctx.stop: handle_abort
+            7. handle_abort: 执行剩余 CheckpointStage (V1.0.4 新增), 然后 return
+            8. return PipelineExecutor.assemble_result(ctx)
+        """
         ctx = ExecutionContext(task=task)
 
         # 1. Pre-bridge stages
@@ -435,18 +451,31 @@ class ExecutionPipeline:
             )
 
         # 3. Post-bridge stages
-        for stage in self.post_bridge_stages:
+        aborted_idx = -1
+        for i, stage in enumerate(self.post_bridge_stages):
             ctx = stage(ctx)
             if ctx.stop:
-                # post-bridge Stage 短路，直接用 ctx.result
-                if ctx.result is not None:
-                    return ctx.result
-                # Stage 设 stop 但没设 result -> 防御性
-                return self._error_result(
-                    ctx, f"post_bridge stage '{stage.name}' stopped without result"
-                )
+                aborted_idx = i
+                break
 
-        # 4. 组装 Result
+        # 4. V1.0.4 关键: 如果 stop, 仍执行剩余 CheckpointStage (记录 abort 事实)
+        # ChatGPT 9.9/10 Q4: "Condition -> metadata -> Checkpoint -> Pipeline stop"
+        if ctx.stop and aborted_idx >= 0:
+            for stage in self.post_bridge_stages[aborted_idx + 1:]:
+                # 识别 CheckpointStage (duck typing via name + store attr)
+                if stage.name == "checkpoint" and hasattr(stage, "store"):
+                    ctx = stage(ctx)
+                    # CheckpointStage 不修改 ctx.stop, 也不设 result
+                    # (只写存储, pass)
+            # 然后 return
+            if ctx.result is not None:
+                return ctx.result
+            # Stage 设 stop 但没设 result -> 防御性
+            return self._error_result(
+                ctx, f"post_bridge stage '{self.post_bridge_stages[aborted_idx].name}' stopped without result"
+            )
+
+        # 5. 组装 Result
         return PipelineExecutor.assemble_result(ctx)
 
     def _base_execute(self, ctx: ExecutionContext) -> ExecutionContext:
@@ -519,16 +548,22 @@ def default_pipeline(
     quota: Any = None,
     include_metrics: bool = True,
     include_retry: bool = False,
+    include_condition: bool = False,
+    condition: Any = None,
+    condition_on_true: str = "continue",
+    condition_on_false: str = "continue",
+    condition_name: str = "condition",
     include_checkpoint: bool = False,
     execution_store: Any = None,
 ) -> ExecutionPipeline:
-    """构造 V1.0.3 默认 Pipeline。
+    """构造 V1.0.4 默认 Pipeline。
 
     默认 Stages:
         pre_bridge:  [RouteStage(router)]
-        post_bridge: [MetricsStage()]  (if include_metrics)
-                     [RetryStage()]     (if include_retry, 在前)
-                     [CheckpointStage()] (if include_checkpoint, 在最末)
+        post_bridge: [MetricsStage()]              (if include_metrics)
+                     [RetryStage()]                 (if include_retry, 在前)
+                     [ConditionStage(condition)]    (if include_condition, 中间)
+                     [CheckpointStage()]            (if include_checkpoint, 在最末)
 
     Args:
         router: Router 实例（通常是 ScoreRouter）
@@ -537,6 +572,15 @@ def default_pipeline(
         include_retry: 是否包含 RetryStage（默认 False，V1.0.2 保守默认）
                        V1.0.2 决策：测试期默认 False，避免破坏现有用户
                        用户主动开启：default_pipeline(router, quota, include_retry=True)
+        include_condition: V1.0.4 新增：是否包含 ConditionStage（默认 False）
+                          条件分支 / 跳过 / 终止
+        condition: V1.0.4 新增：Callable[[ExecutionContext], bool] 条件
+                   (include_condition=True 时必传)
+        condition_on_true: V1.0.4 新增：condition=True 时的动作
+                          ("continue" | "skip" | "abort", 默认 "continue")
+        condition_on_false: V1.0.4 新增：condition=False 时的动作
+                           ("continue" | "skip" | "abort", 默认 "continue")
+        condition_name: V1.0.4 新增：ConditionStage 名称（用于 metadata 调试）
         include_checkpoint: V1.0.3 新增：是否包含 CheckpointStage（默认 False）
                            写入 ExecutionStore 的 ExecutionContext 快照
                            V1.0.3 决策：默认 False，Checkpoint 需要 explicit 开启
@@ -559,6 +603,13 @@ def default_pipeline(
         - post_bridge 顺序：[RetryStage, MetricsStage, CheckpointStage]
         - Pipeline 主体 0 修改（仅 default_pipeline 工厂函数变化）
         - 依赖 ExecutionStore 抽象（不绑定 SQLite）
+
+    V1.0.4 变更（ADR-0024）:
+        - 新增 include_condition + condition + condition_on_true + condition_on_false
+          + condition_name 参数
+        - post_bridge 顺序：[RetryStage, MetricsStage, ConditionStage, CheckpointStage]
+        - Pipeline 主体 0 修改（仅 default_pipeline 工厂函数变化）
+        - Condition is a control boundary, not a data boundary
     """
     pre_bridge = [RouteStage(router)]
     post_bridge: list = []
@@ -570,7 +621,23 @@ def default_pipeline(
         post_bridge.append(RetryStage())
     if include_metrics:
         post_bridge.append(MetricsStage())
+    # V1.0.4: ConditionStage 在中间（控制流, 在 Metrics 后 Checkpoint 前）
+    # Runtime Contract §9.1.5 Stage 顺序约定
+    if include_condition:
+        from planner.stages.condition_stage import ConditionStage
+        if condition is None:
+            raise ValueError(
+                "default_pipeline(include_condition=True) requires condition. "
+                "Pass a callable: condition=lambda ctx: ctx.bridge_result.success"
+            )
+        post_bridge.append(ConditionStage(
+            condition=condition,
+            on_true=condition_on_true,
+            on_false=condition_on_false,
+            name=condition_name,
+        ))
     # V1.0.3: CheckpointStage 在最末（捕获最终 bridge_result + server_metrics）
+    # V1.0.4 增量: 即使 abort 也要写 Checkpoint (ChatGPT 9.9/10 Q4 关键采纳)
     # Runtime Contract §9.1.2 Stage 顺序约定
     if include_checkpoint:
         from planner.stages.checkpoint_stage import CheckpointStage
