@@ -76,6 +76,7 @@ class PlanExecutor:
         event_bus: Optional[EventBus] = None,
         pipeline: Optional[ExecutionPipeline] = None,
         quota: Any = None,
+        include_retry: bool = False,
     ):
         """
         Args:
@@ -85,13 +86,18 @@ class PlanExecutor:
             event_bus: EventBus 实例（V0.9.4 可选，传入后执行时 emit 事件）
             pipeline: ExecutionPipeline 实例（V1.0.1 可选，默认 default_pipeline(router, quota)）
             quota: QuotaManager 实例（V1.0.1 可选，传给 default_pipeline）
+            include_retry: V1.0.2 新增，透传给 default_pipeline（默认 False）
+                           仅在 pipeline=None 时生效
         """
         self.router = router
         self.planner = planner or RuleBasedPlanner()
         self.plan_store = plan_store
         self.event_bus = event_bus
         # V1.0.1: Pipeline 替代 router.execute()（ADR-0021）
-        self.pipeline = pipeline or default_pipeline(router, quota=quota)
+        # V1.0.2: include_retry 透传（ADR-0022）
+        self.pipeline = pipeline or default_pipeline(
+            router, quota=quota, include_retry=include_retry
+        )
         self.last_plan: Optional[Plan] = None
 
     def execute(self, task: Task) -> Result:

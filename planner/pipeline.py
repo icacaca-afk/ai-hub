@@ -518,25 +518,41 @@ def default_pipeline(
     router: Router,
     quota: Any = None,
     include_metrics: bool = True,
+    include_retry: bool = False,
 ) -> ExecutionPipeline:
-    """构造 V1.0.1 默认 Pipeline。
+    """构造 V1.0.2 默认 Pipeline。
 
     默认 Stages:
         pre_bridge:  [RouteStage(router)]
         post_bridge: [MetricsStage()]  (if include_metrics)
+                     [RetryStage()]     (if include_retry, 在前)
 
     Args:
         router: Router 实例（通常是 ScoreRouter）
         quota: QuotaManager（可选）
         include_metrics: 是否包含 MetricsStage（默认 True）
+        include_retry: 是否包含 RetryStage（默认 False，V1.0.2 保守默认）
+                       V1.0.2 决策：测试期默认 False，避免破坏现有用户
+                       用户主动开启：default_pipeline(router, quota, include_retry=True)
 
     Returns:
         ExecutionPipeline 实例
 
     API Stability: Experimental
+
+    V1.0.2 变更（ADR-0022）：
+        - 新增 include_retry 参数（默认 False）
+        - post_bridge 顺序：[RetryStage, MetricsStage]（先重试，再 metrics）
+        - Pipeline 主体 0 修改（仅 default_pipeline 工厂函数变化）
     """
     pre_bridge = [RouteStage(router)]
-    post_bridge = []
+    post_bridge: list = []
+    # V1.0.2: RetryStage 在前（先重试，再 metrics）
+    # Runtime Contract §9.1.2 Stage 顺序约定
+    if include_retry:
+        # 局部导入避免循环依赖
+        from planner.stages.retry_stage import RetryStage
+        post_bridge.append(RetryStage())
     if include_metrics:
         post_bridge.append(MetricsStage())
     return ExecutionPipeline(
