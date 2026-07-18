@@ -221,3 +221,142 @@ class RuntimeMetadata:
         或: ctx.runtime.set_custom("my_plugin", value) (helper)
         """
         self.custom[key] = value
+
+    # ─────────────────────────────────────────────────────────
+    # V1.0.8 新增: 5 个核心 getter (采纳 ChatGPT 9.91/10)
+    # 统一访问接口, 替代散落属性访问
+    # ─────────────────────────────────────────────────────────
+
+    def get_stop_reason(self) -> Optional[str]:
+        """获取停止原因 (顶级 stopped_by).
+
+        Returns:
+            stopped_by 字符串 (e.g. "condition:c1:skip", "retry:exhausted")
+            None 表示未停止 (正常完成)
+        """
+        return self.stopped_by
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """获取 server metrics (返回 copy 避免外部修改).
+
+        Returns:
+            server_metrics dict (默认空 dict, never None)
+        """
+        return dict(self.server_metrics)
+
+    def get_condition(self) -> Optional["ConditionEval"]:
+        """获取最后一次 condition eval.
+
+        Returns:
+            ConditionEval 实例 (ConditionStage 写入)
+            None 表示未执行 condition
+        """
+        return self.condition_eval
+
+    def get_plan_progress(self) -> Dict[str, int]:
+        """获取 plan 聚合进度 (返回 copy).
+
+        Returns:
+            plan dict, e.g. {"success": 3, "failed": 1, "total": 4}
+            默认空 dict
+        """
+        return dict(self.plan)
+
+    def get_custom(self, name: str, default: Any = None) -> Any:
+        """获取 user plugin 命名空间数据 (返回引用, 允许修改).
+
+        注意: 与 get_metrics()/get_plan_progress() 不同, custom 返回引用
+        因为 plugin namespace 设计上就是允许修改的.
+
+        Args:
+            name: plugin 名称 (e.g. "my_plugin")
+            default: 默认值, 找不到时返回 (默认 None)
+
+        Returns:
+            plugin 写入的数据
+            未找到返回 default
+        """
+        return self.custom.get(name, default)
+
+    # ─────────────────────────────────────────────────────────
+    # V1.0.8 新增: 5 个 has_xxx() 方法 (采纳 ChatGPT 9.91/10 Non-blocking)
+    # API Human Factor: 比 if get_xxx() is not None 可读性更好
+    # ─────────────────────────────────────────────────────────
+
+    def has_stop_reason(self) -> bool:
+        """是否有停止原因 (顶级 stopped_by)."""
+        return self.stopped_by is not None
+
+    def has_metrics(self) -> bool:
+        """是否有 server metrics (非空 dict)."""
+        return bool(self.server_metrics)
+
+    def has_condition(self) -> bool:
+        """是否执行过 condition (ConditionEval 不为 None)."""
+        return self.condition_eval is not None
+
+    def has_plan_progress(self) -> bool:
+        """是否有 plan 聚合进度 (非空 dict)."""
+        return bool(self.plan)
+
+    def has_custom(self, name: str) -> bool:
+        """是否有指定 plugin 数据.
+
+        Args:
+            name: plugin 名称
+
+        Returns:
+            True 如果 custom[name] 存在
+        """
+        return name in self.custom
+
+    # ─────────────────────────────────────────────────────────
+    # V1.0.8 新增: resolve_stop_reason (采纳 ChatGPT 9.88/10 Q3 + 9.91/10 命名一致)
+    # 命名变更: resolve_stopped_by → resolve_stop_reason (与 get_stop_reason 一致)
+    # 封装 4 级优先级查找, CheckpointStage 改用此方法 (净减代码)
+    # ─────────────────────────────────────────────────────────
+
+    def resolve_stop_reason(self, ctx: "ExecutionContext") -> Optional[str]:
+        """解析停止原因 (4 级优先级查找, 封装 V1.0.7 内联逻辑).
+
+        优先级 (V1.0.7 行为, 封装到 RuntimeMetadata):
+          1. self.stopped_by (顶级字段, V1.0.7 新 API)
+          2. self.condition_eval.stopped_by (V1.0.7 强类型)
+          3. ctx.metadata["condition_eval"]["stopped_by"] (V1.0.6 dict 兼容)
+          4. ctx.stop → "stop_flag" (兜底)
+
+        未来扩展 (V1.x / V2):
+          - RetryStage: 写 self.stopped_by = "retry:exhausted"
+          - Timeout: 写 self.stopped_by = "timeout:30s"
+          - Cancellation: 写 self.stopped_by = "cancellation:user"
+          - Hook: 写 self.stopped_by = "hook:my_hook"
+          - Manual Abort: 写 self.stopped_by = "manual:user_id"
+
+        Args:
+            ctx: ExecutionContext (用于读取 metadata 兜底)
+
+        Returns:
+            stopped_by 字符串 或 None (未停止)
+        """
+        # 优先级 1: 顶级 stopped_by
+        if self.stopped_by is not None:
+            return self.stopped_by
+        # 优先级 2: condition_eval.stopped_by
+        if self.condition_eval is not None and self.condition_eval.stopped_by is not None:
+            return self.condition_eval.stopped_by
+        # 优先级 3: ctx.metadata["condition_eval"] dict 兜底
+        ctx_metadata = getattr(ctx, "metadata", None) or {}
+        if isinstance(ctx_metadata, dict):
+            condition_eval = ctx_metadata.get("condition_eval")
+            if isinstance(condition_eval, dict):
+                stopped_by = condition_eval.get("stopped_by")
+                if stopped_by:
+                    return stopped_by
+        # 优先级 4: ctx.stop → "stop_flag"
+        if getattr(ctx, "stop", False):
+            return "stop_flag"
+        return None
+
+    # V1.0.7 → V1.0.8 命名过渡: resolve_stopped_by 别名 (保留向后兼容)
+    # 第三方代码可能用了 resolve_stopped_by, 保留别名避免 breaking
+    resolve_stopped_by = resolve_stop_reason  # alias for backward compat
