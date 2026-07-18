@@ -3,10 +3,19 @@
 - **里程碑**: V1.0.8
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: **Draft** (待 ChatGPT 审核)
+- **状态**: **Accepted** ✅ (ChatGPT 9.91/10 APPROVED, commit 98fc86f)
 - **依赖**: [ADR-0027 RuntimeMetadata](0027-runtime-metadata-schema.md) (V1.0.7 Accepted 9.88/10)
-- **后续**: V1.0.8 ADR-0029 Stage Registry / Pipeline Introspection
-- **ChatGPT 路线图**: V1.0.7 代码审核 9.88/10 Q8 — "V1.0.8: Metadata Access API (MUST)"
+- **后续**: V1.0.8 ADR-0029 Stage Registry (MUST, ChatGPT 路线图)
+- **ChatGPT 审核**: 9.91/10 APPROVED — `docs/reviews/0028-adr-chatgpt-review.md`
+- **采纳调整** (采纳 ChatGPT 9.91/10 2 个 Non-blocking):
+  - **T1**: `resolve_stopped_by` → `resolve_stop_reason`（与 `get_stop_reason` 命名一致，Terminology 一致）
+  - **T2**: 新增 5 个 `has_xxx()` 方法（API Human Factor，比 `if get_xxx() is not None` 更可读）
+- **V1.0.9 路线图** (采纳 ChatGPT 9.91/10):
+  - MUST: Stage Registry
+  - SHOULD: Pipeline Introspection
+  - SHOULD: Metadata Access API 完整化 (is_stopped / is_success / stop_reason)
+  - LATER: Metadata Export (to_dict / to_json / snapshot)
+  - LATER: Schema Version (真正需要时)
 
 > **StageDescriptor 答 "What is a Stage?" (静态)**
 > **RuntimeMetadata 答 "What happened during execution?" (动态)**
@@ -151,24 +160,73 @@ class RuntimeMetadata:
         return self.custom.get(name, default)
 
     # ─────────────────────────────────────────────────────────
-    # V1.0.8 新增: resolve_stopped_by (采纳 ChatGPT 9.88/10 Q3)
+    # V1.0.8 新增: 5 个 has_xxx() 方法 (采纳 ChatGPT 9.91/10 Non-blocking)
+    # API Human Factor: 比 if get_xxx() is not None 可读性更好
     # ─────────────────────────────────────────────────────────
 
-    def resolve_stopped_by(self, ctx: "ExecutionContext") -> Optional[str]:
-        """解析 stopped_by (4 级优先级查找).
+    def has_stop_reason(self) -> bool:
+        """是否有停止原因 (顶级 stopped_by).
+
+        Returns:
+            True 如果 runtime.stopped_by is not None
+        """
+        return self.stopped_by is not None
+
+    def has_metrics(self) -> bool:
+        """是否有 server metrics (非空 dict).
+
+        Returns:
+            True 如果 server_metrics 非空
+        """
+        return bool(self.server_metrics)
+
+    def has_condition(self) -> bool:
+        """是否执行过 condition (ConditionEval 不为 None).
+
+        Returns:
+            True 如果 condition_eval is not None
+        """
+        return self.condition_eval is not None
+
+    def has_plan_progress(self) -> bool:
+        """是否有 plan 聚合进度 (非空 dict).
+
+        Returns:
+            True 如果 plan 非空
+        """
+        return bool(self.plan)
+
+    def has_custom(self, name: str) -> bool:
+        """是否有指定 plugin 数据.
+
+        Args:
+            name: plugin 名称
+
+        Returns:
+            True 如果 custom[name] 存在
+        """
+        return name in self.custom
+
+    # ─────────────────────────────────────────────────────────
+    # V1.0.8 新增: resolve_stop_reason (采纳 ChatGPT 9.88/10 Q3 + 9.91/10 命名一致)
+    # 命名变更: resolve_stopped_by → resolve_stop_reason (与 get_stop_reason 一致)
+    # ─────────────────────────────────────────────────────────
+
+    def resolve_stop_reason(self, ctx: "ExecutionContext") -> Optional[str]:
+        """解析停止原因 (4 级优先级查找, 封装 V1.0.7 内联逻辑).
 
         优先级 (V1.0.7 行为, 封装到 RuntimeMetadata):
-          1. ctx.runtime.stopped_by (顶级字段, V1.0.7 新 API)
-          2. ctx.runtime.condition_eval.stopped_by (V1.0.7 强类型)
+          1. self.stopped_by (顶级字段, V1.0.7 新 API)
+          2. self.condition_eval.stopped_by (V1.0.7 强类型)
           3. ctx.metadata["condition_eval"]["stopped_by"] (V1.0.6 dict 兼容)
           4. ctx.stop → "stop_flag" (兜底)
 
         未来扩展 (V1.x / V2):
-          - RetryStage: 写 ctx.runtime.stopped_by = "retry:exhausted"
-          - Timeout: 写 ctx.runtime.stopped_by = "timeout:30s"
-          - Cancellation: 写 ctx.runtime.stopped_by = "cancellation:user"
-          - Hook: 写 ctx.runtime.stopped_by = "hook:my_hook"
-          - Manual Abort: 写 ctx.runtime.stopped_by = "manual:user_id"
+          - RetryStage: 写 self.stopped_by = "retry:exhausted"
+          - Timeout: 写 self.stopped_by = "timeout:30s"
+          - Cancellation: 写 self.stopped_by = "cancellation:user"
+          - Hook: 写 self.stopped_by = "hook:my_hook"
+          - Manual Abort: 写 self.stopped_by = "manual:user_id"
 
         Args:
             ctx: ExecutionContext (用于读取 metadata 兜底)
@@ -194,6 +252,10 @@ class RuntimeMetadata:
         if getattr(ctx, "stop", False):
             return "stop_flag"
         return None
+
+    # V1.0.7 兼容: resolve_stopped_by 别名 (采纳 V1.0.8 命名变更过渡)
+    # 第三方代码可能用了 resolve_stopped_by, 保留别名避免 breaking
+    resolve_stopped_by = resolve_stop_reason  # alias for backward compat
 ```
 
 ### 2.2 CheckpointStage 改造 (采纳 ChatGPT 9.88/10 Q3)
