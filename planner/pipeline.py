@@ -33,6 +33,7 @@ from core.bridge import BridgeResult
 from core.provider import Provider
 from core.result import Result
 from core.task import Task
+from planner.stage_descriptor import StageDescriptor, get_descriptor
 from router.router import Router
 
 logger = logging.getLogger(__name__)
@@ -182,9 +183,7 @@ class RouteStage:
     """
 
     # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
-    # Lazy import 避免循环依赖 (stage_descriptor 依赖 ExecutionContext)
-    from planner.stage_descriptor import StageDescriptor as _SD
-    descriptor = _SD(
+    descriptor = StageDescriptor(
         name="route",
         version=1,
         role="stage",
@@ -253,9 +252,7 @@ class MetricsStage:
     """
 
     # V1.0.6: 显式 StageDescriptor (ADR-0026 ChatGPT 9.94/10 Critical Q7)
-    # Lazy import 避免循环依赖
-    from planner.stage_descriptor import StageDescriptor as _SD
-    descriptor = _SD(
+    descriptor = StageDescriptor(
         name="metrics",
         version=1,
         role="metric",
@@ -491,8 +488,7 @@ class ExecutionPipeline:
         # 1. Pre-bridge stages
         for stage in self.pre_bridge_stages:
             # V1.0.6: 提取 descriptor (Hook 收到 descriptor, Backwards-compat)
-            from planner.stage_descriptor import get_descriptor as _get_desc
-            descriptor = _get_desc(stage)
+            descriptor = get_descriptor(stage)
             if self.hooks.enabled:
                 self.hooks.fire_before_stage(ctx, stage.name, descriptor=descriptor)
             try:
@@ -530,7 +526,7 @@ class ExecutionPipeline:
         aborted_idx = -1
         for i, stage in enumerate(self.post_bridge_stages):
             # V1.0.6: 提取 descriptor (Hook 收到 descriptor, Backwards-compat)
-            descriptor = _get_desc(stage)
+            descriptor = get_descriptor(stage)
             if self.hooks.enabled:
                 self.hooks.fire_before_stage(ctx, stage.name, descriptor=descriptor)
             try:
@@ -558,7 +554,6 @@ class ExecutionPipeline:
                 # V1.0.6: 改用 descriptor.always_run_after_stop (ADR-0026 ChatGPT 9.94/10)
                 # 关键: 不再 duck typing (stage.name + hasattr(stage, "store"))
                 # Pipeline 只关心行为信号, 不关心 stage.name 字符串
-                from planner.stage_descriptor import get_descriptor
                 descriptor = get_descriptor(stage)
                 if descriptor.always_run_after_stop:
                     if self.hooks.enabled:

@@ -29,6 +29,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Callable, Optional
 
@@ -62,6 +63,31 @@ OnErrorHook = Callable[..., None]  # (ctx, stage_name, exc, descriptor=None)
 
 # On Stop Hook (ctx.stop 触发时)
 OnStopHook = Callable[[ExecutionContext, str], None]  # (ctx, stopped_by)
+
+
+# ─────────────────────────────────────────────────────────────
+# V1.0.6: Hook 签名兼容性检测 (ChatGPT 9.95/10 Q5 采纳)
+# ─────────────────────────────────────────────────────────────
+
+def _supports_descriptor(hook) -> bool:
+    """V1.0.6: 检查 hook 是否接受 descriptor 关键字参数.
+
+    ChatGPT 9.95/10 Q5 采纳: 用 inspect.signature 替代 try/except TypeError.
+    原因: 避免 hook 内部 raise TypeError 误判, 初始化时决定.
+    """
+    try:
+        sig = inspect.signature(hook)
+    except (ValueError, TypeError):
+        # 一些 C 实现的 callable 没有 signature
+        return False
+    # 检查 named param 'descriptor' (允许 KEYWORD_ONLY / POSITIONAL_OR_KEYWORD)
+    if "descriptor" in sig.parameters:
+        return True
+    # **kwargs 也算支持 (会接收到所有 kwargs)
+    for p in sig.parameters.values():
+        if p.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────
@@ -107,6 +133,12 @@ class PipelineHooks:
         self.on_error = list(on_error or [])
         self.on_stop = list(on_stop or [])
 
+        # V1.0.6: 用 inspect.signature 缓存 supports_descriptor (ChatGPT 9.95/10 Q5 采纳)
+        # 避免 TypeError fallback 误判, 初始化时决定
+        self._before_stage_supports = [_supports_descriptor(h) for h in self.before_stage]
+        self._after_stage_supports = [_supports_descriptor(h) for h in self.after_stage]
+        self._on_error_supports = [_supports_descriptor(h) for h in self.on_error]
+
     @property
     def enabled(self) -> bool:
         """是否启用 (即有任一 hook 注册).
@@ -150,15 +182,14 @@ class PipelineHooks:
     ) -> None:
         """触发 before_stage hooks (Best Effort).
 
-        V1.0.6: descriptor 是可选参数, 旧 Hook (V1.0.5 接受 (ctx, stage_name)) 仍可工作.
+        V1.0.6: descriptor 是可选参数, 用 inspect.signature 缓存 supports (ChatGPT 9.95/10 Q5 采纳).
+        旧 Hook (V1.0.5 接受 (ctx, stage_name)) 仍可工作.
         """
-        for hook in self.before_stage:
+        for hook, supports in zip(self.before_stage, self._before_stage_supports):
             try:
-                # V1.0.6: 智能调用 — 旧 Hook 不传 descriptor, 新 Hook 收 descriptor
-                try:
+                if supports:
                     hook(ctx, stage_name, descriptor=descriptor)
-                except TypeError:
-                    # 旧 Hook 不接受 descriptor 参数
+                else:
                     hook(ctx, stage_name)
             except Exception as e:
                 logger.warning("before_stage hook raised: %s", e)
@@ -168,13 +199,13 @@ class PipelineHooks:
     ) -> None:
         """触发 after_stage hooks (Best Effort).
 
-        V1.0.6: descriptor 是可选参数, 旧 Hook 仍可工作.
+        V1.0.6: descriptor 是可选参数, 用 inspect.signature 缓存 supports.
         """
-        for hook in self.after_stage:
+        for hook, supports in zip(self.after_stage, self._after_stage_supports):
             try:
-                try:
+                if supports:
                     hook(ctx, stage_name, descriptor=descriptor)
-                except TypeError:
+                else:
                     hook(ctx, stage_name)
             except Exception as e:
                 logger.warning("after_stage hook raised: %s", e)
@@ -188,13 +219,13 @@ class PipelineHooks:
     ) -> None:
         """触发 on_error hooks (Best Effort).
 
-        V1.0.6: descriptor 是可选参数, 旧 Hook 仍可工作.
+        V1.0.6: descriptor 是可选参数, 用 inspect.signature 缓存 supports.
         """
-        for hook in self.on_error:
+        for hook, supports in zip(self.on_error, self._on_error_supports):
             try:
-                try:
+                if supports:
                     hook(ctx, stage_name, exc, descriptor=descriptor)
-                except TypeError:
+                else:
                     hook(ctx, stage_name, exc)
             except Exception as e:
                 logger.warning("on_error hook raised: %s", e)

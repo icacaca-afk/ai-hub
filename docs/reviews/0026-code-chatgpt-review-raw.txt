@@ -1,0 +1,517 @@
+﻿[2026-07-18T06:27:35.390Z] count=26 generating=false
+[2026-07-18T06:27:38.126Z] count=26 generating=false
+=== CHATGPT REPLY (full) ===
+总体评价：9.95 / 10（APPROVED，可合并）。
+
+从你提供的 ADR 演进来看，V1.0.x 已经形成了比较清晰的一条演进主线：
+
+ExecutionPipeline → Retry → Checkpoint → Condition → Hooks → StageDescriptor
+
+这几步之间没有出现明显的架构回退，StageDescriptor 也确实解决了 V1.0.4 中唯一让我会担心的设计债（stage.name == "checkpoint"）。
+
+下面按照你提出的问题审核。
+
+总评分
+维度	分数
+Architecture	10/10
+API Stability	9.9/10
+Runtime Contract	10/10
+Backward Compatibility	10/10
+Test Strategy	9.9/10
+Extensibility	10/10
+Overall	9.95/10
+
+结论：APPROVED。
+
+没有看到阻塞合并的问题。
+
+Q1 StageDescriptor 结构
+
+我认为目前的数据结构基本正确。
+
+真正属于 Runtime 行为的字段只有：
+
+Python
+Run
+name
+always_run_after_stop
+idempotent
+has_side_effects
+
+剩余字段更多属于元数据：
+
+owner
+description
+version
+experimental
+capabilities
+role
+
+所以现在这样：
+
+Python
+Run
+StageDescriptor(
+    ...
+)
+
+完全可以。
+
+我不会拆 Metadata 子对象。
+
+原因：
+
+如果拆：
+
+descriptor.metadata.owner
+descriptor.metadata.version
+descriptor.behavior.idempotent
+
+API 会明显复杂。
+
+V1.x 不值得。
+
+因此：
+
+Adopt：保持现在 flat dataclass。
+
+Q2 FrozenSet 是否正确
+
+这是我比较赞同的一个决定。
+
+因为 Descriptor 已经：
+
+Python
+Run
+@dataclass(frozen=True)
+
+那么：
+
+FrozenSet
+
+比
+
+Set
+
+一致。
+
+否则：
+
+descriptor 可 hash
+
+descriptor.capabilities 却 mutable
+
+会出现语义冲突。
+
+因此：
+
+FrozenSet[str]
+
+比 Set 更合理。
+
+我的建议只有一点：
+
+增加辅助构造：
+
+Python
+Run
+StageDescriptor(
+    capabilities=frozenset({"retry","metrics"})
+)
+
+稍微不方便。
+
+可以提供：
+
+Python
+Run
+StageDescriptor.with_capabilities(...)
+
+或者
+
+Python
+Run
+StageDescriptor(
+    capabilities={"retry","metrics"}
+)
+
+内部自动：
+
+frozenset(...)
+
+这属于体验优化。
+
+非阻塞。
+
+Q3 Protocol
+
+这里我认为你采纳 Protocol 是正确方向。
+
+比 ABC 好。
+
+因为 Stage 实际上就是：
+
+duck typing
+
+真正需要的是：
+
+callable(ctx)
+descriptor
+
+而不是继承。
+
+因此：
+
+Protocol
+
+非常符合 Python 风格。
+
+唯一建议：
+
+增加
+
+Python
+Run
+def is_stage(obj) -> TypeGuard[Stage]:
+
+而不是：
+
+isinstance(..., Stage)
+
+原因：
+
+TypeGuard 对 IDE 更友好。
+
+属于 V2 优化。
+
+Q4 Lazy Import
+
+这是我唯一建议调整的地方。
+
+现在：
+
+pipeline.py
+
+↓
+
+lazy import StageDescriptor
+
+说明：
+
+有循环引用
+
+真正应该解决的是：
+
+ExecutionContext
+
+不要进入
+
+stage_descriptor.py
+
+推荐：
+
+Python
+Run
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from planner.pipeline import ExecutionContext
+
+然后：
+
+Protocol
+
+直接写：
+
+Python
+Run
+def __call__(self, ctx: "ExecutionContext") -> "ExecutionContext"
+
+即可。
+
+这样：
+
+StageDescriptor
+
+完全独立。
+
+比 lazy import 更干净。
+
+属于：
+
+Non-blocking
+
+Q5 Hook TypeError fallback
+
+这是目前唯一一个让我觉得有点 "Pythonic but fragile" 的地方。
+
+现在：
+
+Python
+Run
+try:
+    hook(..., descriptor=...)
+except TypeError:
+    hook(...)
+
+问题：
+
+如果 Hook 内部：
+
+Python
+Run
+raise TypeError(...)
+
+也会被误判。
+
+更稳的方式：
+
+使用
+
+Python
+Run
+inspect.signature()
+
+初始化时缓存：
+
+supports_descriptor=True
+
+之后：
+
+if support:
+    ...
+else:
+    ...
+
+这样：
+
+Pipeline 每次 fire 都不用：
+
+TypeError
+
+属于：
+
+V1.x 非阻塞。
+
+Q6 always_run_after_stop
+
+我认为这是本次 ADR 最大的优点。
+
+我赞同：
+
+Behavior > Taxonomy
+
+不要：
+
+role == checkpoint
+
+不要：
+
+stage.name == checkpoint
+
+直接：
+
+always_run_after_stop
+
+非常明确。
+
+以后：
+
+任何 Stage：
+
+CleanupStage
+
+AuditStage
+
+TelemetryStage
+
+都可以：
+
+always_run_after_stop=True
+
+Pipeline 根本不用知道它是谁。
+
+这是典型：
+
+Open/Closed。
+
+我建议保持。
+
+Q7 Built-in Stage migration
+
+从你描述来看：
+
+已经：
+
+Route
+Retry
+Metrics
+Condition
+Checkpoint
+
+全部都有 descriptor。
+
+这就是我之前 ADR 中建议的方案。
+
+千万不要：
+
+factory 猜测
+
+例如：
+
+hasattr(stage,"store")
+
+这是重新引入 duck typing。
+
+所以：
+
+当前实现是正确的。
+
+Q8 V1.0.4 Compatibility
+
+这一点我认为：
+
+保持了。
+
+原因：
+
+Checkpoint 自己声明：
+
+always_run_after_stop=True
+
+Pipeline：
+
+descriptor.always_run_after_stop
+
+所以：
+
+ctx.stop=True
+
+↓
+
+Checkpoint
+
+↓
+
+仍执行
+
+V1.0.4 Runtime Contract 没被破坏。
+
+这是 ADR-0026 最大成功点。
+
+Q9 Test Coverage
+
+27 个测试已经比较完整。
+
+不过我建议补两个。
+
+① Descriptor identity
+
+例如：
+
+assert stage.descriptor is stage.descriptor
+
+保证：
+
+Descriptor 是常量。
+
+不是：
+
+每次 new
+② Unknown third-party stage
+
+例如：
+
+Python
+Run
+class ThirdParty:
+
+    name="abc"
+
+    def __call__(...):
+
+验证：
+
+get_descriptor()
+
+↓
+
+默认 descriptor
+
+↓
+
+Pipeline 正常运行
+
+这个属于真正验证兼容性。
+
+Q10 ADR-0027 Runtime Metadata
+
+我认为：
+
+StageDescriptor 与 RuntimeMetadata 没冲突。
+
+因为：
+
+Descriptor：
+
+Stage 自身
+
+Metadata：
+
+ExecutionContext 当前运行
+
+两个维度不同。
+
+例如：
+
+Descriptor：
+
+role="checkpoint"
+
+Metadata：
+
+condition_eval
+
+server_metrics
+
+retry_count
+
+没有命名空间冲突。
+
+因此：
+
+ADR-0027 可以直接继续。
+
+Adopt / Defer
+建议	结论	优先级
+保持 StageDescriptor 当前字段	Adopt	Critical
+保持 FrozenSet	Adopt	Critical
+保持 Protocol	Adopt	Critical
+所有 Built-in Stage 显式 descriptor	Adopt	Critical
+保持 always_run_after_stop 行为信号	Adopt	Critical
+用 TYPE_CHECKING 消除 lazy import	Adopt	Non-blocking
+Hook compatibility 改为 inspect.signature	Adopt	Non-blocking
+增加 TypeGuard is_stage()	Defer	V2
+Metadata 子对象	Defer	V2
+Enum Role	Defer	V2
+V1.0.7（ADR-0027）建议
+
+我认为下一步不要继续增加新的 Stage，而应开始稳定运行时元数据模型。
+
+建议 ADR-0027 聚焦：
+
+Runtime Metadata Schema：统一 ctx.metadata 的命名空间和字段约定（如 condition_eval、server_metrics、retry 等），避免后续 Stage 各自定义键名。
+
+Stage Registry：基于 StageDescriptor 建立注册与发现机制，为插件化和第三方 Stage 做准备。
+
+Metadata Validation：提供轻量的 schema 校验或约定，保证 Hook、Checkpoint、Condition 等组件共享一致的数据结构。
+
+这条路线与目前的 StageDescriptor 完全兼容，也不会破坏 V1.0.x 已建立的 Runtime Contract。
+
+最终结论
+
+评分：9.95 / 10
+
+这是一个成熟、可发布的实现。相比 V1.0.5，V1.0.6 最重要的价值不是增加功能，而是消除了基于字符串和 duck typing 的 Pipeline 耦合，把 Stage 的行为能力提升为显式元数据（StageDescriptor），为后续 Runtime Metadata、Stage Registry 和插件体系打下了稳定基础。
+
+结论：APPROVED，建议合并。

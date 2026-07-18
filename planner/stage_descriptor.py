@@ -28,9 +28,12 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, dataclass, field
-from typing import Any, FrozenSet, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
 
-from planner.pipeline import ExecutionContext
+if TYPE_CHECKING:
+    # V1.0.6: 用 TYPE_CHECKING 消除循环依赖 (ChatGPT 9.95/10 Q4 采纳)
+    # stage_descriptor.py 不再 runtime 依赖 pipeline.py
+    from planner.pipeline import ExecutionContext
 
 
 # ─────────────────────────────────────────────────────────────
@@ -51,7 +54,7 @@ class Stage(Protocol):
     """
     descriptor: "StageDescriptor"
 
-    def __call__(self, ctx: ExecutionContext) -> ExecutionContext: ...
+    def __call__(self, ctx: "ExecutionContext") -> "ExecutionContext": ...
 
 
 # ─────────────────────────────────────────────────────────────
