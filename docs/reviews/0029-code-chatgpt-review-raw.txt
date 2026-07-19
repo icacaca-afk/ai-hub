@@ -1,0 +1,588 @@
+[2026-07-19T10:33:25.092Z] count=4 generating=false
+[2026-07-19T10:33:27.129Z] count=4 generating=false
+=== CHATGPT REPLY (full) ===
+V1.0.8 Stage Registry Implementation Review
+总评分：9.72 / 10 APPROVED（带 ADR 修订要求）
+
+整体评价：这次实现质量很高，尤其是你没有为了“严格照 ADR”而硬套错误设计，而是在实现阶段发现 ADR-0029 的三个隐藏假设错误，然后用最小侵入方式修正。
+
+核心判断：
+
+代码方向正确，ADR 需要回写。
+
+不应该反过来修改代码迎合 ADR。
+
+V1.0.8 的核心价值是把 Stage 从“硬编码 Pipeline”提升为“可发现、可组合、可扩展注册系统”。这个目标已经达成。
+
+1. ADR deviation：default_pipeline(router, *, store, registry)
+评分：10/10
+
+你的修正正确。
+
+原 ADR：
+
+Python
+Run
+def default_pipeline(*, registry=None)
+
+存在三个现实错误：
+
+错误 1
+
+ADR 假设：
+
+Python
+Run
+Pipeline(stages=stages)
+
+但实际：
+
+Python
+Run
+ExecutionPipeline(
+    router,
+    pre_bridge_stages,
+    post_bridge_stages
+)
+
+这是 ADR 与代码事实冲突。
+
+错误 2
+
+RouteStage:
+
+Python
+Run
+RouteStage(router)
+
+不是：
+
+Python
+Run
+RouteStage()
+
+所以 registry 不可能保存一个完全可执行 Stage。
+
+错误 3
+
+CheckpointStage:
+
+Python
+Run
+CheckpointStage(store)
+
+同理。
+
+你的修复：
+
+Python
+Run
+default_pipeline(
+    router,
+    *,
+    store=None,
+    registry=None
+)
+
+是正确边界：
+
+Registry
+    ↓
+Discovery metadata
+
+Pipeline factory
+    ↓
+Runtime wiring
+
+这是成熟架构的典型模式。
+
+建议 ADR-0029 增加：
+
+Registry stores discoverable Stage descriptors and prototype instances. Runtime dependencies must be injected by pipeline factories.
+
+2. Stub dependencies 是否合理？
+评分：9.5/10
+
+结论：
+
+✅ 可以接受
+⚠️ 需要补充限制说明
+
+你的设计：
+
+Python
+Run
+RouteStage(router=None)
+
+CheckpointStage(
+    store=_NullStore()
+)
+
+本质：
+
+Registry 保存：
+
+Stage identity
+Stage role
+Stage capability
+Stage metadata
+
+不是保存：
+
+Runnable execution instance
+
+这是正确方向。
+
+但是目前存在一个风险：
+
+用户：
+
+Python
+Run
+stage = default_registry().lookup("route")
+
+stage.execute(...)
+
+可能得到：
+
+Python
+Run
+AttributeError
+router is None
+
+所以建议增加保护。
+
+例如：
+
+Python
+Run
+class RouteStage:
+
+    def execute(self, ctx):
+        if self.router is None:
+            raise RuntimeError(
+                "RouteStage from registry is discovery-only. "
+                "Use default_pipeline() for execution."
+            )
+
+同理 CheckpointStage。
+
+这样错误从：
+
+NoneType error
+
+升级为：
+
+Architecture misuse error
+3. Registry instance ≠ Pipeline instance
+评分：10/10
+
+这是正确设计。
+
+错误方向：
+
+Registry
+    |
+    修改 Stage dependency
+    |
+Pipeline
+
+会导致：
+
+全局状态污染
+
+多 Pipeline 冲突
+
+测试困难
+
+正确：
+
+Registry
+
+    lookup metadata
+
+
+Factory
+
+    reconstruct runtime Stage
+
+
+Pipeline
+
+    executable objects
+
+类似：
+
+Spring Bean Definition：
+
+Registry = BeanDefinition
+
+Runtime = Bean Instance
+
+所以：
+
+Python
+Run
+registry.lookup("route")
+!=
+pipeline.route_stage
+
+完全合理。
+
+4. store=None 跳过 checkpoint
+评分：9.8/10
+
+我支持你的行为。
+
+旧：
+
+Python
+Run
+if store is None:
+    raise ValueError
+
+属于：
+
+“强制 runtime 必须完整配置”
+
+新版：
+
+Python
+Run
+store=None
+
+=> no checkpoint
+
+更符合 Registry 哲学：
+
+capability available ≠ capability mandatory
+
+尤其 V1.0.8 是扩展阶段。
+
+建议 ADR：
+
+明确：
+
+CheckpointStage is optional runtime capability.
+
+Absence of store disables checkpointing.
+5. Retry 不进入 DEFAULT_ORDER
+评分：10/10
+
+正确。
+
+现在：
+
+Registry
+ |
+ + route
+ + retry
+ + checkpoint
+ + metrics
+ + condition
+
+
+DEFAULT_ORDER
+
+route
+metrics
+checkpoint
+condition
+
+这是两个概念：
+
+discovery order
+
+“系统有什么”
+
+execution order
+
+“默认运行什么”
+
+不能混。
+
+否则未来：
+
+RetryStage
+AuthStage
+CacheStage
+GuardStage
+AuditStage
+
+全部进入默认 pipeline。
+
+最终：
+
+DEFAULT_ORDER
+=
+垃圾桶
+
+所以：
+
+保持：
+
+Python
+Run
+retry registered
+
+but opt-in
+
+正确。
+
+6. 两个 default_pipeline 是否混乱？
+评分：9.0/10
+
+这是唯一明显架构债。
+
+现在：
+
+planner.pipeline.default_pipeline
+
+V1.0.4
+
+
+planner.stage_registry.default_pipeline
+
+V1.0.8
+
+两个名字一样。
+
+短期：
+
+✅ 可以接受
+
+因为：
+
+保留旧 API
+
+无 breaking change
+
+但是 V1.1 前建议处理。
+
+推荐：
+
+旧：
+
+Python
+Run
+planner.pipeline.default_pipeline
+
+改文档别名：
+
+legacy_default_pipeline
+
+或者：
+
+新增：
+
+Python
+Run
+planner.pipeline.create_pipeline
+
+未来：
+
+planner.pipeline
+    Pipeline
+    create_pipeline
+
+
+planner.stage_registry
+    StageRegistry
+    default_pipeline
+
+职责更清晰。
+
+当前不建议改。
+
+7. _NullStore 私有是否合理？
+评分：10/10
+
+保持：
+
+Python
+Run
+_NullStore
+
+正确。
+
+原因：
+
+它不是业务对象。
+
+它只是：
+
+implementation adapter
+
+公开：
+
+Python
+Run
+NullStore
+
+反而污染 API。
+
+测试需要：
+
+mock。
+
+生产需要：
+
+真实 ExecutionStore。
+
+所以：
+
+Python
+Run
+private class
+
+正确。
+
+8. 测试覆盖
+评分：9.7/10
+
+62 个测试非常充分。
+
+覆盖：
+
+✅ register
+✅ replace
+✅ unregister
+✅ index
+✅ capability
+✅ role
+✅ singleton
+✅ factory
+✅ dependency injection
+✅ store toggle
+
+缺少：
+
+1. mutation during iteration
+
+例如：
+
+Python
+Run
+for stage in registry:
+    registry.unregister(stage.name)
+
+建议：
+
+V1.1 再处理。
+
+2. thread safety
+
+现在：
+
+StageRegistry
+    dict
+    list index
+
+不是线程安全。
+
+但是：
+
+V1.0.8 不需要。
+
+未来：
+
+MCP server / WebUI 多线程访问时考虑：
+
+Python
+Run
+threading.RLock
+3. property test
+
+例如：
+
+Invariant:
+
+register
+unregister
+register
+
+index == storage
+
+不是现在必须。
+
+最重要的三个 ADR 修订建议
+必须修改 ADR-0029
+1. Stage Registry 定义
+
+增加：
+
+Registry stores discoverable Stage definitions, not guaranteed executable runtime instances.
+
+2. default_pipeline
+
+改：
+
+旧：
+
+Python
+Run
+default_pipeline(*, registry=None)
+
+新：
+
+Python
+Run
+default_pipeline(
+    router,
+    *,
+    store=None,
+    registry=None
+)
+3. runtime dependency injection
+
+新增：
+
+Registry phase:
+
+Stage discovery
+
+
+Factory phase:
+
+Runtime dependency injection
+
+
+Execution phase:
+
+Pipeline execution
+最终评价
+项目	分数
+架构方向	10
+ADR 一致性	9
+Runtime 注入设计	10
+Registry 抽象	10
+测试质量	9.7
+API 稳定性	10
+长期扩展性	9.8
+总分：9.72 / 10
+状态：
+✅ APPROVED
+
+但建议：
+
+先更新 ADR-0029（revision 1），再 merge/tag。
+
+不要重新设计代码。
+
+当前实现已经接近 V1.0 阶段应该有的架构质量。
+
+下一步路线建议：
+
+V1.0.8 fixup
+ |
+ ADR-0029 Rev1
+ |
+ tag v1.0.8
+ |
+ V1.0.9 Stage Lifecycle Hooks
+        |
+        before_execute
+        after_execute
+        on_error
+
+Stage Registry 这一层打稳后，后面的 Workflow Runtime / DAG Executor 会明显容易很多。

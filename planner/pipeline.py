@@ -235,7 +235,16 @@ class RouteStage:
         - ctx.result = failed Result
         - ctx.stop = True
         - Pipeline 跳过 base_execute
+
+        Rev1 R4 (ChatGPT 9.72/10): misuse guard — 若 router is None (registry
+        discovery stub), 升级为 Architecture misuse error, 避免 NoneType error。
         """
+        if self.router is None:
+            raise RuntimeError(
+                "RouteStage from registry is discovery-only (router=None stub). "
+                "Use default_pipeline(router, ...) to construct an executable "
+                "ExecutionPipeline with real runtime deps."
+            )
         provider = self.router.route(ctx.task)
         if provider is None:
             return ctx.with_result(

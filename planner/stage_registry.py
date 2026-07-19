@@ -323,7 +323,14 @@ class _NullStore:
 
     Q5 职责分离: Registry 仅用于 discovery (按 name/role/capability 索引).
     实际执行时 default_pipeline(router, store) 用 real store 构造 CheckpointStage.
+
+    Rev1 R4 (ChatGPT 9.72/10): 暴露 is_registry_stub=True 标记,
+    CheckpointStage.__call__ 检测此标记并将 NoneType error 升级为
+    Architecture misuse error (RuntimeError).
     """
+
+    # Rev1 R4: 标记此 store 是 registry stub, 不应被执行
+    is_registry_stub: bool = True
 
     def append(self, event: Any) -> None:
         """No-op append (registry registration only, never executed)."""

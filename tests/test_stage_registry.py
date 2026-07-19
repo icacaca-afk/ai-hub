@@ -511,3 +511,73 @@ class TestThirdPartyStageIntegration:
         empty_registry.register(_make_stub("plugin_b", role="metric"))
         all_stages = empty_registry.all()
         assert len(all_stages) == 2
+
+
+# ─────────────────────────────────────────────────────────────
+# Rev1 R4: Misuse Guard — RouteStage / CheckpointStage (3 tests)
+# ─────────────────────────────────────────────────────────────
+
+class TestMisuseGuard:
+    """Rev1 R4 (ChatGPT 9.72/10): RouteStage / CheckpointStage misuse guard.
+
+    验证: 从 default_registry 取出的 stub-deps Stage 不应被直接执行。
+    若被误用, 应抛 RuntimeError (Architecture misuse error),
+    而不是 AttributeError / NoneType error / 静默吞掉。
+    """
+
+    def test_route_stage_stub_router_raises(self, clean_default):
+        """RouteStage(router=None) 被误调用 → RuntimeError, 非 AttributeError."""
+        from planner.stage_registry import default_registry
+        from planner.pipeline import ExecutionContext
+        from core.task import Task
+
+        stage = default_registry().lookup("route")
+        assert stage is not None
+        # router is None (stub)
+        assert stage.router is None
+
+        task = Task(
+            content="hello",
+            task_id="t1",
+            capabilities=["text"],
+        )
+        ctx = ExecutionContext(task=task)
+
+        with pytest.raises(RuntimeError, match="discovery-only"):
+            stage(ctx)
+
+    def test_checkpoint_stage_stub_store_raises(self, clean_default):
+        """CheckpointStage(store=_NullStore()) 被误调用 → RuntimeError.
+
+        验证 _NullStore.is_registry_stub = True 标记生效。
+        """
+        from planner.stage_registry import default_registry
+        from planner.pipeline import ExecutionContext
+        from core.task import Task
+        from core.bridge import BridgeResult
+
+        stage = default_registry().lookup("checkpoint")
+        assert stage is not None
+        # store is _NullStore (stub)
+        assert getattr(stage.store, "is_registry_stub", False) is True
+
+        task = Task(
+            content="hello",
+            task_id="t2",
+            capabilities=["text"],
+        )
+        br = BridgeResult(success=True, output="ok", artifacts=[])
+        ctx = ExecutionContext(task=task, bridge_result=br)
+
+        with pytest.raises(RuntimeError, match="discovery-only"):
+            stage(ctx)
+
+    def test_null_store_marker_present(self):
+        """_NullStore 暴露 is_registry_stub=True 类属性."""
+        from planner.stage_registry import _NullStore
+
+        # 类属性
+        assert _NullStore.is_registry_stub is True
+        # 实例属性 (getattr)
+        instance = _NullStore()
+        assert getattr(instance, "is_registry_stub", False) is True

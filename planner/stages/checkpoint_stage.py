@@ -304,9 +304,21 @@ class CheckpointStage:
           - store.append 抛异常 → logger.warning → pass
           - 错误信息可写入 snapshot.error (供后续调试)
 
+        Rev1 R4 (ChatGPT 9.72/10): misuse guard — 若 store 是 registry stub
+        (_NullStore with is_registry_stub=True), 升级为 Architecture misuse error,
+        避免 stub store 静默吞掉 snapshot。
+
         Returns:
             原 ctx (Stage 不修改 ExecutionContext)
         """
+        # Rev1 R4: misuse guard
+        if getattr(self.store, "is_registry_stub", False):
+            raise RuntimeError(
+                "CheckpointStage from registry is discovery-only "
+                "(store=_NullStore stub). Use default_pipeline(router, store=...) "
+                "to construct an executable ExecutionPipeline with real runtime deps."
+            )
+
         # 短路: 仅 task / bridge_result 缺失时 pass
         # (V1.0.4 调整: 移除 ctx.stop 短路, 让 Checkpoint 总是记录)
         if ctx.task is None or ctx.bridge_result is None:

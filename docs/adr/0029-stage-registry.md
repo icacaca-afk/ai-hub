@@ -3,17 +3,23 @@
 - **里程碑**: V1.0.8
 - **作者**: ai-hub core team
 - **日期**: 2026-07-18
-- **状态**: **Accepted** ✅ (ChatGPT 9.93/10 APPROVED, commit a09cf7e)
+- **状态**: **Accepted (Rev1)** ✅ (ADR 审核 9.93/10 + 代码审核 9.72/10)
 - **依赖**: [ADR-0026 StageDescriptor](0026-stage-descriptor.md) (V1.0.6 Accepted 9.95/10), [ADR-0027 RuntimeMetadata](0027-runtime-metadata-schema.md) (V1.0.7 Accepted 9.88/10), [ADR-0028 Metadata Access API](0028-metadata-access-api.md) (V1.0.8 Accepted 9.94/10)
 - **后续**: V1.0.9 ADR-0030 Registry Introspection (MUST ①) / ADR-0031 Metadata Serialization (MUST ②) / Pipeline Describe (SHOULD)
-- **ChatGPT 审核**: 9.93/10 APPROVED — `docs/reviews/0029-adr-chatgpt-review.md`
-- **采纳调整** (5 Non-blocking + 1 重构):
+- **ChatGPT ADR 审核**: 9.93/10 APPROVED — `docs/reviews/0029-adr-chatgpt-review.md` (commit a09cf7e)
+- **ChatGPT 代码审核**: 9.72/10 APPROVED with Rev1 修订 — `docs/reviews/0029-code-chatgpt-review.md` (commit pending)
+- **采纳调整** (5 Non-blocking + 1 重构, ADR 审核):
   - **T1**: `reset_default_registry()` 测试 helper（Singleton 污染防护）
   - **T2**: `describe(name)` 返回 StageDescriptor（CLI / Inspection 用）
   - **Q3 重构**: `default_order()` 暴露顺序（Pipeline 不再 hardcode role 顺序）
   - **Q5 职责分离**: ADR 明确 `clear()` 不重注册 builtins, `default_registry()` 永远负责 builtins
   - **Q7 核心**: Registry 不感知 RuntimeMetadata（保持 V1.x 三层解耦）
   - **Q1 范围聚焦**: 不加 `by_owner` / `by_version` / `experimental`（V1.0.8 最小 API）
+- **Rev1 修订** (代码审核 9.72/10, 3 项必改 + 1 项可选采纳):
+  - **R1**: Stage Registry 定义 — 增加声明 "Registry stores discoverable Stage definitions, not guaranteed executable runtime instances"
+  - **R2**: `default_pipeline` 签名修正 — `default_pipeline(router, *, store=None, registry=None) -> ExecutionPipeline` (原 `default_pipeline(*, registry=None) -> Pipeline` 不可执行)
+  - **R3**: 新增三阶段 Runtime Dependency Injection 模型 (Registry phase / Factory phase / Execution phase)
+  - **R4 (可选采纳)**: `RouteStage` / `CheckpointStage` 增加 misuse guard — 将 `NoneType error` 升级为 `Architecture misuse error`
 
 > **StageDescriptor 答 "What is a Stage?" (静态 metadata)**
 > **RuntimeMetadata 答 "What happened during execution?" (动态 metadata)**
@@ -61,6 +67,14 @@ from planner.stages.condition_stage import ConditionStage
 
 V1.0.8 引入 **StageRegistry** — 统一 Stage 注册中心 + 索引 + 查询 API：
 
+> **Rev1 R1 声明 (ChatGPT 代码审核 9.72/10)**:
+>
+> **Registry stores discoverable Stage definitions, not guaranteed executable runtime instances.**
+>
+> 即: Registry 保存 Stage identity / role / capability / metadata (discovery),
+> **不**保证 Stage 实例可直接执行 (runtime deps 可能用 stub 注入)。
+> 实际执行时由 `default_pipeline(router, store, ...)` 工厂注入 real deps 重新构造。
+
 1. **核心 API (8 个方法)**:
    - `register(stage, *, replace=False)` — 注册 Stage (按 descriptor.name)
    - `unregister(name)` — 注销 Stage
@@ -76,9 +90,10 @@ V1.0.8 引入 **StageRegistry** — 统一 Stage 注册中心 + 索引 + 查询 
    - 用户可注册第三方 Stage 到 default registry
    - 避免每个测试/CLI 单独创建 Registry
 
-3. **Default Pipeline 工厂**:
-   - `default_pipeline()` — 用 default registry 构造默认 Pipeline
-   - 替代 `Pipeline(stages=[RouteStage(), MetricsStage(), ...])` 散落构造
+3. **Default Pipeline 工厂** (Rev1 修正, 见 §2.3):
+   - `default_pipeline(router, *, store=None, registry=None)` — 用 default registry 构造默认 ExecutionPipeline
+   - 替代 `ExecutionPipeline(router, pre_bridge_stages=[...], post_bridge_stages=[...])` 散落构造
+   - Runtime deps (router, store) 由 Factory phase 注入, Registry phase 仅 discovery
    - 未来 V1.0.9 评估: 不同的 `default_pipeline(role_set=...)` 构造变体
 
 4. **第三方 Stage 集成**:
@@ -429,58 +444,131 @@ def reset_default_registry() -> None:
     _DEFAULT_REGISTRY = None
 
 
-### 2.3 Default Pipeline 工厂 (Q3 重构)
+### 2.3 Default Pipeline 工厂 (Q3 重构, Rev1 修正)
+
+> **Rev1 修正 (R2, ChatGPT 代码审核 9.72/10)**:
+>
+> 原 ADR §2.3 `default_pipeline(*, registry=None) -> Pipeline` 设计存在 3 个隐藏假设错误：
+> 1. 假设 `Pipeline(stages=stages)` 存在 — 实际是 `ExecutionPipeline(router, pre_bridge_stages, post_bridge_stages)`
+> 2. 假设 `RouteStage()` 零参可工作 — 实际需要 `RouteStage(router)`
+> 3. 假设 `CheckpointStage()` 零参可工作 — 实际需要 `CheckpointStage(store)`
+>
+> **修正方向**: Registry 仅 discovery, Pipeline factory 注入 runtime deps。
+>
+> ```python
+> # 原版 (ADR §2.3, 不可执行):
+> def default_pipeline(*, registry: Optional[StageRegistry] = None) -> Pipeline:
+>     return Pipeline(stages=stages)
+>
+> # Rev1 (代码实施, 可执行):
+> def default_pipeline(
+>     router: Any,
+>     *,
+>     store: Any = None,
+>     registry: Optional[StageRegistry] = None,
+> ) -> ExecutionPipeline:
+>     ...
+> ```
+
+#### 2.3.1 三阶段 Runtime Dependency Injection 模型 (Rev1 R3)
+
+> ChatGPT 代码审核 9.72/10 要求新增 — 明确三阶段分离。
+
+| 阶段 | 职责 | API |
+|------|------|-----|
+| **Registry phase** | Stage discovery — 按 name / role / capability 索引 Stage prototype | `registry.register(stage)` / `registry.by_role()` / `registry.by_capability()` |
+| **Factory phase** | Runtime dependency injection — 注入 router / store 等 runtime deps | `default_pipeline(router, store=..., registry=...)` |
+| **Execution phase** | Pipeline execution — 调用 Stage 处理 ExecutionContext | `ExecutionPipeline(ctx)` |
+
+**关键不变量**:
+- Registry phase 的 Stage 实例 **不保证 runnable** (可能用 stub deps 注册)
+- Factory phase 用 real deps 重建 dep-requiring Stages (如 `RouteStage(router)`, `CheckpointStage(store)`)
+- Execution phase 只接受 Factory phase 产物, 不直接读 Registry
 
 ```python
-# planner/stage_registry.py (继续)
-def default_pipeline(*, registry: Optional[StageRegistry] = None) -> Pipeline:
-    """用 registry 构造 default Pipeline.
+# planner/stage_registry.py (Rev1 实施)
+def default_pipeline(
+    router: Any,
+    *,
+    store: Any = None,
+    registry: Optional[StageRegistry] = None,
+) -> Any:
+    """用 registry 构造 default ExecutionPipeline (V1.0.8 Registry-based 工厂).
 
     Args:
+        router: Router 实例 (required, for RouteStage)
+        store: ExecutionStore (optional, for CheckpointStage; None = skip checkpoint)
         registry: 可选, 默认用 default_registry()
 
     Returns:
-        Pipeline 实例, stages 按固定顺序:
-          [RouteStage, MetricsStage, CheckpointStage, ConditionStage(s)]
+        ExecutionPipeline 实例, stages 按 registry.default_order() 顺序:
+          pre_bridge:  [RouteStage(router)]
+          post_bridge: [MetricsStage, (CheckpointStage if store), ConditionStage(s)]
 
-    关键设计:
-      - 顺序固定 (RouteStage → MetricsStage → CheckpointStage → Conditions)
-      - 第三方 Stage 可通过 register 注入, 但顺序按"标准顺序"插入
+    关键设计 (Rev1):
+      - Registry 仅 discovery (Stage 用 stub deps 注册)
+      - Factory 用 real deps 重新构造 dep-requiring Stages
+      - store=None 跳过 CheckpointStage (capability available ≠ mandatory)
       - 未来 V1.0.9: 支持 `default_pipeline(role_set=...)` 构造变体
     """
-    from planner.pipeline import Pipeline
+    from planner.pipeline import ExecutionPipeline, RouteStage
+    from planner.stages.checkpoint_stage import CheckpointStage
 
     if registry is None:
         registry = default_registry()
 
-    stages = []
-    # Q3 重构: 走 registry.default_order() 而非 hardcode role tuple
+    pre_bridge: list = []
+    post_bridge: list = []
     for role in registry.default_order():
-        stages.extend(registry.by_role(role))
-    return Pipeline(stages=stages)
+        if role == "stage":
+            pre_bridge.append(RouteStage(router=router))
+        else:
+            for stage in registry.by_role(role):
+                desc = get_descriptor(stage)
+                if desc.name == "checkpoint":
+                    if store is not None:
+                        post_bridge.append(CheckpointStage(store=store))
+                else:
+                    post_bridge.append(stage)
+    return ExecutionPipeline(
+        router=router,
+        pre_bridge_stages=pre_bridge,
+        post_bridge_stages=post_bridge,
+    )
 ```
 
-### 2.4 使用示例 (V1.0.8)
+#### 2.3.2 CheckpointStage 可选性 (Rev1)
+
+> ChatGPT 代码审核 §4 9.8/10 要求明确。
+
+`CheckpointStage` 是 **optional runtime capability**:
+- `store=None` ⇒ 不构造 CheckpointStage（capability available ≠ mandatory）
+- `store=<real store>` ⇒ 构造并加入 post_bridge
+
+这与 RetryStage 不进入 DEFAULT_ORDER 的哲学一致：discovery ≠ execution。
+
+### 2.4 使用示例 (V1.0.8, Rev1 修正)
 
 ```python
 # 旧写法 (V1.0.1-V1.0.7)
-from planner.pipeline import Pipeline, RouteStage, MetricsStage
+from planner.pipeline import ExecutionPipeline, RouteStage, MetricsStage
 from planner.stages.checkpoint_stage import CheckpointStage
 
-pipeline = Pipeline(stages=[
-    RouteStage(),
-    MetricsStage(),
-    CheckpointStage(),
-])
+pipeline = ExecutionPipeline(
+    router=router,
+    pre_bridge_stages=[RouteStage(router)],
+    post_bridge_stages=[MetricsStage(), CheckpointStage(store=store)],
+)
 # 重复 boilerplate, 散落导入, 难以查询
 
-# 新写法 (V1.0.8 Registry)
+# 新写法 (V1.0.8 Registry, Rev1)
 from planner.stage_registry import default_pipeline
 
-pipeline = default_pipeline()
-# 一行, 自动用 default registry, 自动按 role 排序
+# router 是 runtime dep (required), store 是 runtime dep (optional)
+pipeline = default_pipeline(router, store=store)
+# 一行, 自动用 default registry, 自动按 role 排序, 自动注入 runtime deps
 
-# 高级用法 1: 按 role 查询
+# 高级用法 1: 按 role 查询 (Registry phase — discovery only)
 from planner.stage_registry import default_registry
 registry = default_registry()
 all_metrics = registry.by_role("metric")  # [MetricsStage()]
