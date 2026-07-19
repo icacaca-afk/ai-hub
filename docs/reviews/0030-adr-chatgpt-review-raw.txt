@@ -1,0 +1,818 @@
+[2026-07-19T10:49:07.071Z] count=5 generating=false
+[2026-07-19T10:49:09.105Z] count=5 generating=false
+=== CHATGPT REPLY (full) ===
+ADR-0030 Registry Introspection Review
+
+总评分: 9.62 / 10
+
+状态: APPROVED（建议带小修订合并）
+
+总体评价
+
+ADR-0030 是一个非常符合 V1.0.x 演进节奏的 ADR。
+
+它没有继续扩大 Registry 职责，而是准确解决 ADR-0029 留下的核心问题：
+
+ADR-0029 解决 "Where is the Stage?"
+ADR-0030 解决 "What is in the Registry and what does it need?"
+
+这个方向正确。
+
+尤其认可三个架构判断：
+
+StageInfo 不进入 StageDescriptor
+
+保持 StageDescriptor = Stage 自身静态元数据
+
+StageInfo = Registry 上下文信息
+
+requires 不自动反射
+
+runtime dependency 是部署/组装层信息，不应该从 Python signature 猜测
+
+Serialization 与 Introspection 分离
+
+ADR-0030 做 Registry view
+
+ADR-0031 做通用 metadata serialization
+
+这符合 ai-hub 当前从 Router → Runtime → Operating System 的演进路径。
+
+1. 架构方向
+评分: 9.8 / 10
+评价
+
+非常正确。
+
+V1.0.8 Stage Registry 最大的问题不是 "不能注册 Stage"，而是：
+
+Registry:
+    lookup()
+    by_role()
+    by_capability()
+
+只能回答：
+
+"有没有这个 Stage?"
+
+不能回答：
+
+"它来自哪里?"
+
+"它需要什么?"
+
+"当前系统有哪些能力?"
+
+ADR-0030 正好补齐 Runtime Operating System 必须具备的 introspection 能力。
+
+尤其：
+
+Registry
+    |
+    +-- StageDescriptor
+    |
+    +-- StageInfo
+            |
+            + source
+            + requires
+            + registered_at
+
+这个分层非常合理。
+
+建议
+
+保持当前设计。
+
+不要把：
+
+last_used_at
+invocation_count
+execution_count
+
+加入 StageInfo。
+
+原因：
+
+这些属于：
+
+RuntimeMetrics
+ExecutionAnalytics
+Telemetry
+
+不是 Registry。
+
+否则 Registry 会逐渐变成：
+
+Registry
++ Metadata
++ Metrics
++ Runtime State
+
+最终职责污染。
+
+2. API 一致性
+评分: 9.6 / 10
+评价
+
+6 个 API 与 V1.0.8 风格基本一致：
+
+API	职责
+lookup	单对象发现
+describe	单对象描述
+info	单对象完整信息
+describe_all	批量描述
+summary	人类阅读
+to_dict/json	外部消费
+
+设计层次清晰。
+
+特别认可：
+
+Python
+Run
+registry.info("route")
+
+作为：
+
+describe(name)
++
+source
++
+requires
++
+registered_at
+
+的扩展。
+
+没有破坏旧 API。
+
+小问题
+
+你的描述里面有一个数量问题：
+
+你写：
+
+6 个 Introspection API
+
+实际上列出来：
+
+info
+describe_all
+summary
+list_builtin
+list_third_party
+find_stages_needing
+to_dict
+to_json
+
+是 8 个 API。
+
+建议 ADR 改成：
+
+6 类 Introspection Capability
+
+或者：
+
+8 APIs grouped into 6 capability areas
+
+否则审核时容易被挑。
+
+评分扣 0.4 来自这里。
+
+3. 向后兼容
+评分: 9.9 / 10
+评价
+
+非常好。
+
+这个：
+
+Python
+Run
+def register(
+    self,
+    stage,
+    *,
+    replace=False,
+    source="third_party",
+    requires=(),
+)
+
+是正确扩展方式。
+
+兼容：
+
+Python
+Run
+register(stage)
+
+仍然：
+
+Python
+Run
+source="third_party"
+requires=()
+
+兼容：
+
+Python
+Run
+register(stage, replace=True)
+
+没有破坏。
+
+建议
+
+增加一个测试：
+
+Python
+Run
+def test_register_unknown_source_allowed()
+
+例如：
+
+Python
+Run
+registry.register(
+    stage,
+    source="internal_plugin"
+)
+
+是否允许？
+
+目前 source 是开放字符串：
+
+优点：
+
+未来扩展容易。
+
+缺点：
+
+容易拼写错误：
+
+third_party
+thirdparty
+third-party
+
+建议：
+
+V1.x 保持开放。
+
+但增加：
+
+Python
+Run
+VALID_SOURCES = {
+    "builtin",
+    "third_party",
+    "test",
+}
+
+只 warning，不 raise。
+
+V1.1 再严格。
+
+4. 数据结构
+评分: 9.7 / 10
+StageInfo
+
+设计：
+
+Python
+Run
+@dataclass(frozen=True)
+class StageInfo:
+    descriptor
+    source
+    requires
+    registered_at
+
+正确。
+
+尤其：
+
+Python
+Run
+requires: Tuple[str,...]
+
+比：
+
+Python
+Run
+List[str]
+
+好。
+
+因为：
+
+frozen
+
+hashable
+
+immutable
+
+StageSummary
+
+正确。
+
+它解决：
+
+CLI:
+
+stage list
+
+不需要加载完整 descriptor。
+
+类似：
+
+Linux:
+
+systemctl list-units
+
+而不是：
+
+systemctl dump-all
+一个建议
+
+StageInfo：
+
+Python
+Run
+registered_at: Optional[datetime]
+
+我建议改：
+
+Python
+Run
+registered_at: datetime
+
+原因：
+
+register() 永远生成：
+
+Python
+Run
+datetime.now()
+
+没有必要 Optional。
+
+测试 fixture 可以 mock：
+
+Python
+Run
+registered_at=None
+
+不是生产模型。
+
+但是：
+
+这是 minor issue。
+
+不影响通过。
+
+5. 替代方案质量
+评分: 9.8 / 10
+
+6 个 rejected alternatives 都合理。
+
+尤其认可：
+
+不把 requires 放 StageDescriptor
+
+这是关键。
+
+因为：
+
+StageDescriptor:
+
+What am I?
+
+Registry:
+
+How am I installed?
+
+例如：
+
+同一个 Stage：
+
+RouteStage
+
+可能：
+
+Registry A:
+
+requires=("router",)
+
+Registry B:
+
+requires=("router_v2",)
+
+所以 requires 属于 deployment metadata。
+
+正确。
+
+6. 测试策略
+评分: 9.4 / 10
+
+25+ tests 基本够。
+
+覆盖：
+
+✅ register metadata
+
+✅ backward compatibility
+
+✅ info
+
+✅ summary
+
+✅ serialization
+
+✅ builtin metadata
+
+✅ cleanup
+
+但是缺少两个关键测试。
+
+建议新增 Test 1
+replace metadata isolation
+
+现在：
+
+Python
+Run
+register(stage,
+ source="builtin"
+)
+
+
+register(stage2,
+ replace=True,
+ source="third_party"
+)
+
+应该验证：
+
+旧 info 被完全替换。
+
+建议新增 Test 2
+serialization stability
+
+增加：
+
+Python
+Run
+json.loads(
+    registry.to_json()
+)
+
+然后检查：
+
+schema keys:
+
+stages
+roles
+capabilities
+default_order
+
+避免未来 ADR-0031 改坏。
+
+7. 实施计划
+评分: 9.8 / 10
+
+五阶段路线正确。
+
+尤其：
+
+ADR-0030
+      |
+      v
+Implementation
+      |
+      v
+ADR-0031 Serialization
+
+顺序正确。
+
+不要提前做 CLI。
+
+原因：
+
+CLI 是 presentation layer。
+
+正确依赖：
+
+Registry API
+      |
+      v
+Serialization
+      |
+      v
+CLI
+8. V1.0.10 演化规划
+评分: 9.7 / 10
+
+路线合理。
+
+目前：
+
+StageRegistry
+        |
+        |
+        v
+Introspection
+
+下一步：
+
+Pipeline
+        |
+        v
+Pipeline Introspection
+
+非常自然。
+
+Predicate API 放 RuntimeMetadata 也是正确。
+
+不要放 Registry。
+
+八个审核问题逐项结论
+Q1 StageInfo 字段
+
+结论：
+
+✅ 当前字段正确。
+
+保持：
+
+descriptor
+source
+requires
+registered_at
+
+不要加入：
+
+last_used_at
+invocation_count
+
+延期 V1.1。
+
+Q2 requires 字符串
+
+结论：
+
+✅ 保持字符串。
+
+原因：
+
+V1.x:
+
+JSON friendly
+CLI friendly
+plugin friendly
+
+V2:
+
+Enum。
+
+Q3 source
+
+结论：
+
+✅ 字符串。
+
+当前：
+
+builtin
+third_party
+test
+
+足够。
+
+不要增加：
+
+deprecated
+experimental
+
+因为：
+
+experimental 已属于 StageDescriptor。
+
+Q4 to_dict delegation
+
+结论：
+
+✅ 当前 helper 正确。
+
+原因：
+
+ADR-0031 正好处理：
+
+Metadata Serialization
+
+不要提前耦合。
+
+Q5 CLI 时间
+
+结论：
+
+✅ 放 V1.0.10。
+
+V1.0.9:
+
+API layer
+
+V1.0.10:
+
+Presentation layer
+
+正确。
+
+Q6 find_stages_needing
+
+当前：
+
+Python
+Run
+issubset
+
+结论：
+
+✅ 正确。
+
+例如：
+
+Python
+Run
+find_stages_needing(
+    "router",
+    "store"
+)
+
+语义应该是：
+
+找同时需要 router 和 store 的 Stage
+
+不是 OR。
+
+未来增加：
+
+Python
+Run
+mode="any"
+
+即可。
+
+Q7 registered_at
+
+结论：
+
+✅ 保留。
+
+成本低。
+
+价值高。
+
+对于 debug：
+
+why is this stage here?
+when registered?
+
+很有价值。
+
+Q8 Scope
+
+结论：
+
+✅ 非常合理。
+
+ADR-0030:
+
+Registry introspection
+
+ADR-0031:
+
+Metadata serialization
+
+ADR-0032:
+
+Pipeline introspection
+
+ADR-0033:
+
+Predicate API
+
+拆分优秀。
+
+关键修订要求
+
+合并前建议修改 5 点：
+
+1. 修正 "6 API" 描述
+
+改：
+
+6 个 Introspection API
+
+为：
+
+6 类 Introspection Capability (8 APIs)
+
+2. 增加 source 校验说明
+
+增加：
+
+V1.x source is open string.
+Implementation MAY provide validation warning.
+Strict enum validation deferred to V2.
+3. registered_at 改为非 Optional（推荐）
+
+从：
+
+Python
+Run
+Optional[datetime]
+
+改：
+
+Python
+Run
+datetime
+
+如果坚持 Optional，需要说明原因。
+
+4. 增加 serialization stability test
+
+至少：
+
+test_to_json_schema_stable
+5. 明确 find_stages_needing 语义
+
+增加：
+
+Current semantics:
+AND query.
+
+Future:
+mode="any" may be introduced.
+下一步路线建议
+
+推荐路线：
+
+V1.0.9
+ |
+ |-- ADR-0030 Registry Introspection
+ |      |
+ |      + StageInfo
+ |      + StageSummary
+ |      + source/requires
+ |      + dump API
+ |
+ |
+ |-- ADR-0031 Metadata Serialization
+ |
+ v
+V1.0.10
+ |
+ |-- Pipeline Introspection
+ |       pipeline.describe()
+ |       pipeline.graph()
+ |
+ |-- CLI
+ |       ai-hub stage list
+ |       ai-hub stage info
+ |       ai-hub stage dump
+ |
+ |-- Predicate API
+ |
+ v
+V1.1
+ |
+ |-- Plugin system
+ |-- entry_points
+ |-- registry versioning
+ |-- runtime telemetry
+最终结论
+ADR-0030 Registry Introspection
+
+评分:
+9.62 / 10
+
+状态:
+APPROVED (minor revisions recommended)
+
+架构判断:
+正确
+
+范围控制:
+优秀
+
+向后兼容:
+优秀
+
+主要风险:
+无架构风险，仅文档一致性和 API 数量描述问题
+
+建议:
+修改上述 5 点后直接 Accepted
+
+这份 ADR 的成熟度已经接近 ADR-0028 / ADR-0026 水平，是 V1.0.x Runtime 演进中比较关键的一步。
