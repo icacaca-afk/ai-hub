@@ -3,10 +3,14 @@
 - **里程碑**: V1.0.9
 - **作者**: ai-hub core team
 - **日期**: 2026-07-19
-- **状态**: **Accepted** ✅ (ChatGPT ADR 审核 9.62/10 APPROVED with 5 minor revisions)
-- **依赖**: [ADR-0026 StageDescriptor](0026-stage-descriptor.md) (V1.0.6 Accepted 9.95/10), [ADR-0029 Stage Registry](0029-stage-registry.md) (V1.0.8 Accepted Rev1 9.72/10)
-- **后续**: V1.0.10 ADR-0032 Pipeline Introspection (SHOULD) / ADR-0033 Predicate API (SHOULD)
+- **状态**: **Accepted** ✅ (ChatGPT ADR 审核 9.62/10 APPROVED with 5 minor revisions; ChatGPT 代码审核 9.62/10 APPROVED, 0 blocking)
+- **依赖**:
+  - [ADR-0026 StageDescriptor](0026-stage-descriptor.md) (V1.0.6 Accepted 9.95/10)
+  - [ADR-0029 Stage Registry](0029-stage-registry.md) (V1.0.8 Accepted Rev1 9.72/10)
+  - V1.0.8 Rev1 R4 `_NullStore` (Registry stub store, ADR-0029 Rev1 §2.4) — `_register_builtin_stages` 用 `_NullStore()` 作为 CheckpointStage 的 stub store
+- **后续**: V1.0.10 ADR-0031 Metadata Serialization (MUST) / ADR-0032 Pipeline Introspection (SHOULD) / ADR-0033 Predicate API (SHOULD)
 - **ChatGPT ADR 审核**: 9.62/10 APPROVED — `docs/reviews/0030-adr-chatgpt-review.md`
+- **ChatGPT 代码审核**: 9.62/10 APPROVED (0 blocking, R1-R5 全部正确落地, 3 项 minor suggestions deferred to V1.1) — `docs/reviews/0030-code-chatgpt-review.md`
 - **采纳修订** (5 项 minor, ChatGPT 9.62/10):
   - **R1**: §1.2 "6 个 Introspection API" → "6 类 Introspection Capability (8 APIs)" (API 数量描述修正)
   - **R2**: §3.3 新增 source 校验说明 (V1.x 开放字符串 + VALID_SOURCES warning, V1.1 严格 Enum)
