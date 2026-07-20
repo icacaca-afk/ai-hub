@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, dataclass, field
-from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     # V1.0.6: 用 TYPE_CHECKING 消除循环依赖 (ChatGPT 9.95/10 Q4 采纳)
@@ -104,6 +104,19 @@ class StageDescriptor:
 
     # V2 (capabilities 保留 dataclass, Runtime Contract 不依赖)
     capabilities: FrozenSet[str] = field(default_factory=frozenset)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为 dict (V1.0.10, ADR-0031).
+
+        Delegate to ``planner.metadata_serialization.serialize_descriptor``.
+        R1 (ChatGPT 9.6/10): this method is a facade; canonical logic lives
+        in ``serialize_descriptor()``.
+
+        Returns:
+            dict (schema see ADR-0031 §2.1)
+        """
+        from planner.metadata_serialization import serialize_descriptor
+        return serialize_descriptor(self)
 
 
 # ─────────────────────────────────────────────────────────────

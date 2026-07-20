@@ -116,6 +116,19 @@ class RuntimeMetadata:
     # 第三方 Stage 写入: ctx.runtime.custom["my_plugin"] = {...}
 
     # ─────────────────────────────────────────────────────
+    # V1.0.10: to_dict() — ADR-0031 facade (R1: delegate to canonical)
+    # ─────────────────────────────────────────────────────
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为 dict (V1.0.10, ADR-0031).
+
+        Delegate to ``planner.metadata_serialization.serialize_runtime_metadata``.
+        R1 (ChatGPT 9.6/10): this method is a facade; canonical logic lives
+        in ``serialize_runtime_metadata()``.
+        """
+        from planner.metadata_serialization import serialize_runtime_metadata
+        return serialize_runtime_metadata(self)
+
+    # ─────────────────────────────────────────────────────
     # Helper 方法 (采纳 ChatGPT 9.85/10 N1)
     # 集中封装双写逻辑, Stage 不散落双写
     # ─────────────────────────────────────────────────────

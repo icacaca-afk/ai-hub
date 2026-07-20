@@ -84,14 +84,13 @@ class ConditionEval:
     stopped_by: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {
-            "stage": self.stage,
-            "condition_name": self.condition_name,
-            "result": self.result,
-            "action": self.action,
-            "timestamp": self.timestamp,
-            "stopped_by": self.stopped_by,
-        }
+        """序列化为 dict (V1.0.4 → V1.0.10 delegate).
+
+        V1.0.10: 迁移逻辑到 ``planner.metadata_serialization.serialize_condition_eval``.
+        V1.0.4 行为保持不变 (backward compat).
+        """
+        from planner.metadata_serialization import serialize_condition_eval
+        return serialize_condition_eval(self)
 
 
 # ─────────────────────────────────────────────────────────────

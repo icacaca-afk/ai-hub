@@ -80,6 +80,16 @@ class StageInfo:
     # R3 (ChatGPT 9.62/10): register() 永远生成 now, 用 default_factory
     registered_at: datetime = field(default_factory=datetime.now)
 
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为 dict (V1.0.10, ADR-0031).
+
+        Delegate to ``planner.metadata_serialization.serialize_stage_info``.
+        R1 (ChatGPT 9.6/10): this method is a facade; canonical logic lives
+        in ``serialize_stage_info()``.
+        """
+        from planner.metadata_serialization import serialize_stage_info
+        return serialize_stage_info(self)
+
 
 @dataclass(frozen=True)
 class StageSummary:
@@ -457,40 +467,29 @@ class StageRegistry:
         ]
 
     def to_dict(self) -> Dict[str, Any]:
-        """序列化 Registry 状态为 dict (V1.0.9 ADR-0030).
+        """序列化 Registry 状态为 dict (V1.0.9 ADR-0030, V1.0.10 重构).
+
+        V1.0.10 重构: 用 ``serialize_stage_info`` 替代内联 ``_descriptor_to_dict``.
+        Schema 保持 V1.0.9 (R4 stability test 守护).
 
         用于:
-          - CLI: `ai-hub stage dump --json`
+          - CLI: ``ai-hub stage dump --json``
           - MCP server: 跨进程传输
           - WebUI: REST API response
           - Debug: log 结构化输出
 
         Returns:
             {
-                "stages": [
-                    {
-                        "name": "route",
-                        "descriptor": {...},
-                        "source": "builtin",
-                        "requires": ["router"],
-                        "registered_at": "2026-07-19T10:30:00.123456",
-                    },
-                    ...
-                ],
+                "stages": [{...serialize_stage_info...}, ...],
                 "roles": ["stage", "metric", ...],
                 "capabilities": ["selects_provider", ...],
                 "default_order": ["stage", "metric", "checkpoint", "condition"],
             }
         """
+        from planner.metadata_serialization import serialize_stage_info
         return {
             "stages": [
-                {
-                    "name": info.descriptor.name,
-                    "descriptor": _descriptor_to_dict(info.descriptor),
-                    "source": info.source,
-                    "requires": list(info.requires),
-                    "registered_at": info.registered_at.isoformat(),
-                }
+                serialize_stage_info(info)
                 for info in self._info.values()
             ],
             "roles": sorted(self.roles()),
@@ -650,27 +649,17 @@ def _register_builtin_stages(registry: StageRegistry) -> None:
 
 
 def _descriptor_to_dict(d: StageDescriptor) -> Dict[str, Any]:
-    """StageDescriptor → dict (V1.0.9 helper, ADR-0030).
+    """StageDescriptor → dict (V1.0.9 helper, V1.0.10 deprecated).
 
-    本地 helper (不污染 StageDescriptor), V1.0.10 ADR-0031 实施
-    `StageDescriptor.to_dict()` / `from_dict()` 后, 此 helper 可重构为 delegate.
+    V1.0.10: 迁移到 ``planner.metadata_serialization.serialize_descriptor``.
+    此函数保留作为 V1.0.9 backward compat (内部使用).
 
-    Returns:
-        dict with keys: name / role / version / capabilities / idempotent /
-        has_side_effects / always_run_after_stop / experimental / description / owner
+    Deprecated:
+      - V1.0.10: 用 ``StageDescriptor.to_dict()`` 或 ``serialize_descriptor()`` 替代
+      - V1.1: 删除此 helper
     """
-    return {
-        "name": d.name,
-        "role": d.role,
-        "version": d.version,
-        "capabilities": sorted(d.capabilities),
-        "idempotent": d.idempotent,
-        "has_side_effects": d.has_side_effects,
-        "always_run_after_stop": d.always_run_after_stop,
-        "experimental": d.experimental,
-        "description": d.description,
-        "owner": d.owner,
-    }
+    from planner.metadata_serialization import serialize_descriptor
+    return serialize_descriptor(d)
 
 
 # T1 (采纳 ChatGPT 9.93/10): reset_default_registry() 测试 helper
