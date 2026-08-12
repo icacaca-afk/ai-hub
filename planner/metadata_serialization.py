@@ -31,6 +31,7 @@ from planner.stage_descriptor import StageDescriptor
 from planner.runtime_metadata import RuntimeMetadata
 from planner.stage_registry import StageInfo
 from planner.stages.condition_stage import ConditionEval
+from planner.pipeline_descriptor import PipelineDescriptor
 
 
 # ─────────────────────────────────────────────────────────────
@@ -165,6 +166,88 @@ def serialize_condition_eval(ce: ConditionEval) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────
+# PipelineDescriptor → dict (canonical, V1.0.11 ADR-0032)
+# ─────────────────────────────────────────────────────────────
+def serialize_pipeline(pd: PipelineDescriptor) -> Dict[str, Any]:
+    """序列化 PipelineDescriptor 为 dict (V1.0.11 ADR-0032).
+
+    MUST consume PipelineDescriptor, NOT ExecutionPipeline.
+    这是单向转换链的硬约束 (ADR-0032 §2.2 Architecture Invariant).
+
+    Schema (V1.0.11):
+      {
+        "name": str,
+        "stages": List[Dict],   # {id, name, role, position, index}
+        "edges": List[Dict],    # {from, to, type} — from/to 引用 stage id
+        "has_router": bool,
+        "has_quota": bool,
+        "has_hooks": bool,
+      }
+
+    Bridge 作为 virtual node 包含在 stages 中 (graph closure).
+    每个 stage 包含稳定结构 id (pre:0, bridge, post:0 等).
+    """
+    stages: list = []
+    edges: list = []
+
+    # Pre-bridge stages
+    for i, sd in enumerate(pd.pre_bridge):
+        stages.append({
+            "id": f"pre:{i}",
+            "name": sd.name,
+            "role": sd.role,
+            "position": "pre",
+            "index": i,
+        })
+
+    # Bridge virtual node (P0: graph closure)
+    bridge_id = "bridge"
+    stages.append({
+        "id": bridge_id,
+        "name": "__bridge__",
+        "role": "bridge",
+        "position": "bridge",
+        "index": -1,
+    })
+
+    # Post-bridge stages
+    for i, sd in enumerate(pd.post_bridge):
+        stages.append({
+            "id": f"post:{i}",
+            "name": sd.name,
+            "role": sd.role,
+            "position": "post",
+            "index": i,
+        })
+
+    # Edges: pre → bridge
+    if pd.pre_bridge:
+        last_pre_id = f"pre:{len(pd.pre_bridge) - 1}"
+        edges.append({"from": last_pre_id, "to": bridge_id, "type": "pre_to_bridge"})
+
+    # Edges: bridge → post
+    if pd.post_bridge:
+        edges.append({"from": bridge_id, "to": "post:0", "type": "bridge_to_post"})
+
+    # Edges: sequential within post
+    for i in range(1, len(pd.post_bridge)):
+        edges.append({"from": f"post:{i - 1}", "to": f"post:{i}", "type": "sequential"})
+
+    # Edges: sequential within pre (if multiple pre stages)
+    for i in range(1, len(pd.pre_bridge)):
+        edges.append({"from": f"pre:{i - 1}", "to": f"pre:{i}", "type": "sequential"})
+
+    return {
+        "name": pd.name,
+        "stages": stages,
+        "edges": edges,
+        "has_router": pd.has_router,
+        "has_quota": pd.has_quota,
+        "has_hooks": pd.has_hooks,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 # Generic JSON helper
 # ─────────────────────────────────────────────────────────────
 def to_json(d: Dict[str, Any], *, indent: Optional[int] = 2) -> str:
@@ -186,5 +269,6 @@ __all__ = [
     "serialize_stage_info",
     "serialize_runtime_metadata",
     "serialize_condition_eval",
+    "serialize_pipeline",
     "to_json",
 ]

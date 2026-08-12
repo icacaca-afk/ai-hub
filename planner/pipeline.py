@@ -493,6 +493,63 @@ class ExecutionPipeline:
         else:
             self.hooks = hooks
 
+    # ─────────────────────────────────────────────────────────
+    # V1.0.11 ADR-0032: Pipeline Introspection
+    # ─────────────────────────────────────────────────────────
+
+    def describe(self) -> "PipelineDescriptor":
+        """返回 Pipeline 结构描述 (V1.0.11 ADR-0032).
+
+        生成不可变的 PipelineDescriptor 快照, 用于 introspection / serialization.
+        不触发 run(), 不修改执行状态.
+
+        Returns:
+            PipelineDescriptor 实例
+        """
+        from planner.pipeline_descriptor import PipelineDescriptor
+        from planner.stage_descriptor import StageDescriptor
+
+        pre_descs = tuple(
+            StageDescriptor.from_stage(s, position="pre", index=i)
+            for i, s in enumerate(self.pre_bridge_stages)
+        )
+        post_descs = tuple(
+            StageDescriptor.from_stage(s, position="post", index=i)
+            for i, s in enumerate(self.post_bridge_stages)
+        )
+
+        # has_hooks: 是否实际配置了至少一个 Hook (非空容器)
+        has_hooks = (
+            self.hooks is not None
+            and hasattr(self.hooks, 'enabled')
+            and self.hooks.enabled
+        )
+
+        return PipelineDescriptor(
+            pre_bridge=pre_descs,
+            post_bridge=post_descs,
+            has_router=self.router is not None,
+            has_quota=self.quota is not None,
+            has_hooks=has_hooks,
+        )
+
+    def to_dict(self) -> dict:
+        """返回可 JSON 序列化的 dict (V1.0.11 ADR-0032).
+
+        Facade: delegate to serialize_pipeline(self.describe()).
+        R1 约束: canonical logic lives in serialize_pipeline().
+        """
+        from planner.metadata_serialization import serialize_pipeline
+        return serialize_pipeline(self.describe())
+
+    def to_json(self, *, indent: Optional[int] = 2) -> str:
+        """返回 JSON 字符串 (V1.0.11 ADR-0032).
+
+        Delegate to metadata_serialization.to_json(), 不内联 JSON policy.
+        """
+        from planner.metadata_serialization import to_json as _to_json
+        return _to_json(self.to_dict(), indent=indent)
+
     def run(self, task: Task) -> Result:
         """执行 task 经过所有 Stage，返回 Result。
 

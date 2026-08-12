@@ -152,6 +152,69 @@ def get_descriptor(stage: Any) -> StageDescriptor:
 
 
 # ─────────────────────────────────────────────────────────────
+# _STAGE_ROLE_MAP — V1.0.11 ADR-0032
+# ─────────────────────────────────────────────────────────────
+
+_STAGE_ROLE_MAP: Dict[str, str] = {
+    "RouteStage": "router",
+    "MetricsStage": "metrics",
+    "RetryStage": "retry",
+    "ConditionStage": "condition",
+    "CheckpointStage": "checkpoint",
+}
+
+
+# ─────────────────────────────────────────────────────────────
+# StageDescriptor.from_stage() — V1.0.11 ADR-0032
+# ─────────────────────────────────────────────────────────────
+
+
+@classmethod  # type: ignore[misc]
+def from_stage(
+    cls,
+    stage: Any,
+    position: str = "",
+    index: int = -1,
+) -> "StageDescriptor":
+    """从 Stage 实例推断描述信息 (V1.0.11 ADR-0032).
+
+    推断规则:
+      - name: stage.name 或 stage.__class__.__name__.lower()
+      - role: 基于 Stage 类型 (type(stage).__name__), 不基于 name
+      - requires/provides: frozenset() (不猜)
+      - description: "" (不猜)
+      - 未识别类型: role="unknown"
+
+    Unknown ≠ invalid, Unknown = introspectable but unclassified.
+
+    Args:
+        stage: ExecutionStage Protocol 实例
+        position: "pre" | "post" | "" (仅 informational)
+        index: 在 position 列表中的索引 (仅 informational)
+
+    Returns:
+        StageDescriptor 实例
+    """
+    # name: 优先用 stage.name, fallback 用类名
+    name = getattr(stage, "name", None)
+    if name is None:
+        name = type(stage).__name__.lower()
+
+    # role: 基于类型, 不基于 name (ChatGPT P0: name 是 display identity)
+    stage_type = type(stage).__name__
+    role = _STAGE_ROLE_MAP.get(stage_type, "unknown")
+
+    return cls(
+        name=name,
+        role=role,
+    )
+
+
+# 挂载到 StageDescriptor 类上
+StageDescriptor.from_stage = from_stage
+
+
+# ─────────────────────────────────────────────────────────────
 # Module API
 # ─────────────────────────────────────────────────────────────
 
