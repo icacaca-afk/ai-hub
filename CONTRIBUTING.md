@@ -1,42 +1,72 @@
 # Contributing to AI Hub
 
-> 术语定义见 [docs/GLOSSARY.md](docs/GLOSSARY.md)
+[English](CONTRIBUTING.md) | [简体中文](CONTRIBUTING.zh-CN.md)
 
-## 添加新 Provider
+Thank you for contributing. Start with the
+[Architecture Overview](docs/ARCHITECTURE.md),
+[Glossary](docs/GLOSSARY.md), and the relevant accepted ADR.
 
-1. 创建 `providers/your_platform/` 目录
-2. 写 `provider.py`（~20 行）
-3. 在 `cli/main.py` 的 `_build_registry()` 中注册
-4. 运行 `python tests/validate_provider.py` 验证
+## Before changing code
 
-**不改 Router、CLI、Registry 或任何其他代码。**
+- Preserve the frozen boundary: `core/`, the base Router, existing health/score
+  routers, and current Provider implementations are bug-fix only.
+- Write a Proposed ADR before changing an architecture contract, serialized
+  schema, or frozen boundary.
+- Keep provider communication inside Bridge implementations.
+- Keep reader-facing documentation synchronized in English and Simplified
+  Chinese.
+- Never commit credentials, access tokens, cookies, or private runtime output.
 
-详见 [docs/PROVIDER_SPEC.md](docs/PROVIDER_SPEC.md)。
+## Adding a provider
 
-## 添加新 Bridge
+1. Create a new `providers/<name>/` package.
+2. Implement the stable Provider contract and reuse an existing Bridge.
+3. Return a four-state `HealthReport` from new health implementations.
+4. Register only declared capabilities from `core.capabilities.CAPABILITIES`.
+5. Add the provider contract and capability-consistency tests.
 
-1. 在 `core/bridge.py` 中新增一个 Bridge 类，继承 `Bridge`
-2. 实现 `run(task)` 和 `check_available()` 方法
-3. 更新 `core/__init__.py` 导出
+See the [Provider Specification](docs/PROVIDER_SPEC.md) for a complete example.
 
-## 添加新 Capability
+## Changing the pipeline
 
-1. 在 `core/capabilities.py` 的 `CAPABILITIES` 字典中添加标签
-2. 在 `task_keywords.yaml` 中添加关键词映射
-3. 更新 GLOSSARY.md（如果概念有变化）
+Workflow behavior belongs in focused files under `planner/` or
+`planner/stages/`. Preserve these rules:
 
-## 代码规范
+- stages do not mutate ExecutionEvent facts;
+- metadata serialization has one canonical implementation;
+- inspection methods do not execute stages or predicates;
+- schema changes require stability tests and an ADR;
+- source inspection, AST parsing, and hidden callable inference are out of scope
+  unless a future accepted ADR explicitly changes that policy.
 
-- Python 3.11+
-- 零外部依赖（标准库 only）
-- 所有 dataclass 用 `@dataclass`
-- 类型标注必须完整
-- Windows 兼容：`sys.stdout.reconfigure(encoding="utf-8")`
+## Tests
 
-## PR Checklist
+Run focused tests first, then the non-live regression suite:
 
-- [ ] `python tests/test_skeleton.py` 通过
-- [ ] `python tests/validate_provider.py` 通过
-- [ ] 没有修改 Router 的代码（除非讨论过）
-- [ ] 新增 Provider 有 `__init__.py`
-- [ ] GLOSSARY.md 没有被重新定义（只能引用）
+```bash
+python -m pytest tests/test_provider_contract.py -q
+python -m pytest tests/ -x -q \
+  --deselect "tests/test_benchmark.py" \
+  --deselect "tests/test_cli_plan_json.py"
+```
+
+Mark tests that require real providers with `@pytest.mark.live`. Unit and
+contract tests must not require a developer's API keys or signed-in session.
+
+## Pull request checklist
+
+- [ ] The change has a focused scope and a clear rationale.
+- [ ] Frozen files are untouched, or the change is an explicitly justified bug fix.
+- [ ] New architecture behavior has a reviewed ADR.
+- [ ] Focused tests and the non-live regression suite pass.
+- [ ] New Provider capabilities exist in the canonical capability registry.
+- [ ] Public serialized keys have stability coverage.
+- [ ] English and Simplified Chinese reader docs are synchronized.
+- [ ] No credentials or private data are present in the diff.
+
+## Documentation language policy
+
+The unsuffixed reader-facing file is English; the paired Chinese file uses
+`.zh-CN.md`. ADRs, external reviews, handoffs, and version artifacts remain in
+their original language as immutable historical records. See the
+[documentation index](docs/README.md).
