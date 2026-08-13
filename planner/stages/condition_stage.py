@@ -134,6 +134,9 @@ class ConditionStage:
         on_true: str = "continue",
         on_false: str = "continue",
         name: str = "condition",
+        predicate_name: Optional[str] = None,
+        predicate_description: str = "",
+        predicate_subject: str = "",
     ):
         """构造 ConditionStage.
 
@@ -145,6 +148,9 @@ class ConditionStage:
             on_false: condition=False 时的动作
                       ("continue" | "skip" | "abort")
             name: Stage 名称 (用于 metadata 调试, 默认 "condition")
+            predicate_name: 显式 Predicate 语义名；未提供时使用安全 fallback
+            predicate_description: 用户声明的人类可读语义
+            predicate_subject: 用户声明的判断目标
 
         Raises:
             ValueError: condition 为 None 或 on_true/on_false 非法
@@ -167,10 +173,32 @@ class ConditionStage:
         self.on_true = on_true
         self.on_false = on_false
         self._name = name
+        self.predicate_name = predicate_name
+        self.predicate_description = predicate_description
+        self.predicate_subject = predicate_subject
 
     @property
     def name(self) -> str:
         return self._name
+
+    def _resolve_predicate_name(self) -> str:
+        """Resolve a display name without source or bytecode introspection."""
+        if self.predicate_name:
+            return self.predicate_name
+        function_name = getattr(self.condition, "__name__", "")
+        if function_name and function_name != "<lambda>":
+            return function_name
+        return "condition"
+
+    def describe_predicate(self) -> "PredicateDescriptor":
+        """Return declared predicate semantics without evaluating it."""
+        from planner.predicate_descriptor import PredicateDescriptor
+
+        return PredicateDescriptor(
+            name=self._resolve_predicate_name(),
+            description=self.predicate_description,
+            subject=self.predicate_subject,
+        )
 
     def __call__(self, ctx: ExecutionContext) -> ExecutionContext:
         """求值 condition, 按 on_true/on_false 决定动作.
