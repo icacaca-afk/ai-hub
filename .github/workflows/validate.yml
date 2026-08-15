@@ -15,11 +15,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install "pytest>=8,<9"
       - name: Run skeleton tests
         run: python tests/test_skeleton.py
-      - name: Run provider contract tests
-        run: python tests/test_provider_contract.py
-      - name: Run runtime tests
-        run: python tests/test_runtime.py
+      - name: Run provider contract and runtime tests
+        run: python -m pytest tests/test_provider_contract.py tests/test_runtime.py -q
       - name: Validate providers
         run: python tests/validate_provider.py
