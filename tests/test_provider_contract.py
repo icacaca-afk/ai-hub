@@ -178,16 +178,32 @@ def test_marvis_provider_contract():
     print("✅ test_marvis_provider_contract passed (Marvis correctly removed)")
 
 
+def test_claude_provider_contract():
+    """Claude CLI Provider (CLIBridge) must pass Contract (even when CLI is not installed)."""
+    from providers.claude_cli.provider import ClaudeCLIProvider
+    errors = check_contract(ClaudeCLIProvider)
+    assert not errors, f"ClaudeCLIProvider contract violations: {errors}"
+    print("✅ test_claude_provider_contract passed")
+
+
 def test_capability_metadata_consistency():
-    """每个 Provider 声明的 capability 必须存在于 CAPABILITIES 注册表。"""
+    """Every capability declared by a Provider must exist in the CAPABILITIES registry."""
     from core.capabilities import CAPABILITIES
     from providers.demo.provider import DemoProvider
     from providers.qoder.provider import QoderProvider
     from providers.gemini.provider import GeminiCLIProvider
     from providers.openai_api.provider import OpenAIAPIProvider
     from providers.web_ai.provider import WebAIProvider
+    from providers.claude_cli.provider import ClaudeCLIProvider
 
-    providers = [DemoProvider, QoderProvider, GeminiCLIProvider, OpenAIAPIProvider, WebAIProvider]
+    providers = [
+        DemoProvider,
+        QoderProvider,
+        GeminiCLIProvider,
+        OpenAIAPIProvider,
+        WebAIProvider,
+        ClaudeCLIProvider,
+    ]
     for p_class in providers:
         for cap in p_class.metadata.capabilities:
             assert cap in CAPABILITIES, (
@@ -198,7 +214,7 @@ def test_capability_metadata_consistency():
 
 
 def run_all():
-    """手动跑所有 Contract Test。"""
+    """Run all Contract Tests manually."""
     tests = [
         test_demo_provider_contract,
         test_qoder_provider_contract,
@@ -206,6 +222,7 @@ def run_all():
         test_openai_provider_contract,
         test_web_ai_provider_contract,
         test_marvis_provider_contract,
+        test_claude_provider_contract,
         test_zero_modification_kpi,
         test_capability_metadata_consistency,
     ]
