@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Proposed |
+| Status | Implemented; external review pending |
 | Date | 2026-08-17 |
 | Decider | User + external architecture review |
 | Supersedes | — |

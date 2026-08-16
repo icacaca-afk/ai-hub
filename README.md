@@ -20,6 +20,8 @@ Task → Capability → Provider → Bridge → Runtime → Result
   [ADR-0032](docs/adr/0032-pipeline-introspection.md)
 - V1.0.12 Predicate API is implemented locally and awaiting release review; see
   [ADR-0033](docs/adr/0033-predicate-api.md)
+- V1.0.13 `pipeline inspect` is implemented locally and awaiting external
+  review; see [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
 - V1.0.11 verification baseline: **602 passing tests** at release time
 - Stability boundary: `core/`, `router/router.py`,
   `router/health_router.py`, `router/score_router.py`, and existing provider
@@ -79,6 +81,7 @@ markers and test documentation when you need a fully isolated run.
 | `ai-hub status` / `doctor` | Inspect and diagnose providers |
 | `ai-hub benchmark` | Measure healthy provider latency and success |
 | `ai-hub inspect` / `trace` | Inspect plans and execution timelines |
+| `ai-hub pipeline inspect [--json]` | Inspect the default runtime pipeline without executing it |
 | `ai-hub exec-history` / `stats` | Query persisted execution history |
 | `ai-hub quota` / `caps` | Show quota and capability information |
 | `ai-hub session` | Manage runtime sessions |

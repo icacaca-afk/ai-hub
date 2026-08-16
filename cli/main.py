@@ -27,6 +27,7 @@ from cli.plan import cmd_plan
 from cli.inspect import cmd_inspect
 from cli.trace import cmd_trace
 from cli.history import cmd_exec_history
+from cli.pipeline_inspect import cmd_pipeline
 from cli.stats import cmd_stats
 
 
@@ -694,6 +695,7 @@ def main() -> None:
         print('  ai-hub plan "<task>" --json  Plan result as structured JSON (V0.9.3)')
         print('  ai-hub inspect <plan_id>     Inspect stored plan (V0.9.3)')
         print('  ai-hub inspect --list        List recent plans (V0.9.3)')
+        print('  ai-hub pipeline inspect [--json]  Inspect the default runtime pipeline')
         print('  ai-hub trace <plan_id>       Trace plan execution timeline (V0.9.4)')
         print('  ai-hub trace --list          List traced plans (V0.9.4)')
         print('  ai-hub exec-history          List recent plan executions (V0.9.5 SQLite)')
@@ -717,6 +719,7 @@ def main() -> None:
     commands = {
         "ask": cmd_ask,
         "plan": cmd_plan,
+        "pipeline": cmd_pipeline,
         "inspect": cmd_inspect,
         "trace": cmd_trace,
         "exec-history": cmd_exec_history,

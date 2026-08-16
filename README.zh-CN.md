@@ -19,6 +19,8 @@ Task → Capability → Provider → Bridge → Runtime → Result
   [ADR-0032](docs/adr/0032-pipeline-introspection.md)
 - V1.0.12 Predicate API 已在本地实现，等待发布审核，见
   [ADR-0033](docs/adr/0033-predicate-api.md)
+- V1.0.13 `pipeline inspect` 已在本地实现，等待外部审核，见
+  [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
 - V1.0.11 发布时验证基线：**602 项测试通过**
 - 冻结边界：`core/`、`router/router.py`、`router/health_router.py`、
   `router/score_router.py` 和现有 Provider 实现，除 Bug Fix 外不修改
@@ -74,6 +76,7 @@ python -m pytest tests/ -x -q \
 | `ai-hub status` / `doctor` | 查看和诊断 Provider |
 | `ai-hub benchmark` | 测量健康 Provider 的延迟和成功率 |
 | `ai-hub inspect` / `trace` | 查看 Plan 和执行时间线 |
+| `ai-hub pipeline inspect [--json]` | 无执行副作用地查看默认 Runtime Pipeline |
 | `ai-hub exec-history` / `stats` | 查询持久化执行历史 |
 | `ai-hub quota` / `caps` | 查看额度和 Capability |
 | `ai-hub session` | 管理 Runtime Session |

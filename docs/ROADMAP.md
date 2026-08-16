@@ -21,12 +21,12 @@
 |---|---|---|---|
 | V1.0.11 | [ADR-0032](adr/0032-pipeline-introspection.md) | `PipelineDescriptor`, `describe()`, deterministic JSON | Released |
 | V1.0.12 | [ADR-0033](adr/0033-predicate-api.md) | Explicit predicate semantic metadata | Implemented; review pending |
-| V1.0.13 | ADR-0034 | CLI presentation for pipeline and predicate introspection | Planned; ADR required first |
+| V1.0.13 | [ADR-0034](adr/0034-cli-pipeline-introspection.md) | `ai-hub pipeline inspect [--json]` with presentation-only predicate joins | Implemented; review pending |
 
 V1.0.12 explicitly excludes callable source inspection, AST parsing, lambda
-introspection, and a predicate DSL or expression engine. V1.0.13 must decide
-whether structure and predicate semantics are joined only in the presentation
-layer or remain separate.
+introspection, and a predicate DSL or expression engine. V1.0.13 keeps the
+canonical pipeline schema unchanged and joins predicate semantics only in the
+CLI presentation document.
 
 ## Maintenance track
 

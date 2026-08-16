@@ -21,11 +21,11 @@
 |---|---|---|---|
 | V1.0.11 | [ADR-0032](adr/0032-pipeline-introspection.md) | `PipelineDescriptor`、`describe()`、确定性 JSON | 已发布 |
 | V1.0.12 | [ADR-0033](adr/0033-predicate-api.md) | 显式 Predicate 语义元数据 | 已实现，待审核 |
-| V1.0.13 | ADR-0034 | Pipeline 与 Predicate Introspection 的 CLI 展示 | Planned，必须先写 ADR |
+| V1.0.13 | [ADR-0034](adr/0034-cli-pipeline-introspection.md) | `ai-hub pipeline inspect [--json]`，仅在展示层关联 Predicate | 已实现，待审核 |
 
 V1.0.12 明确不做 callable 源码检查、AST 解析、lambda introspection、Predicate
-DSL 或 Expression Engine。V1.0.13 必须决定结构与 Predicate 语义是否只在展示层
-Join，或继续分离。
+DSL 或 Expression Engine。V1.0.13 保持 canonical Pipeline Schema 不变，只在 CLI
+展示文档中关联 Predicate 语义。
 
 ## 维护支线
 
