@@ -33,6 +33,8 @@ DSL 或 Expression Engine。V1.0.13 保持 canonical Pipeline Schema 不变，�
   依据的 Bug Fix 外不修改。
 - 面向读者的说明文档持续维护英文和简体中文版本。
 - 统一包元数据与仓库发布标签。
+- 将递归 Wheel 包发现和无需账号的 `--provider demo` 冒烟路径保持为发布门禁
+  （[ADR-0037](adr/0037-clean-install-and-deterministic-demo.md)）。
 - 按实际 Contract Test 更新安装和 Provider 扩展文档。
 - 外部 Claude CLI Provider PR 完成所要求的修改与 Rebase 后再审核。
 

@@ -40,6 +40,7 @@ from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
 from planner.trace_collector import InMemoryTraceCollector
 from planner.sqlite_execution_store import SQLiteExecutionStore
+from cli.provider_selection import extract_provider_option, narrow_registry
 
 
 # V0.9.3: 进程内 PlanStore（环形缓冲 N=10），供 cmd_inspect 查询
@@ -118,15 +119,26 @@ def cmd_plan(args: list[str]) -> None:
       ai-hub plan "<task>" --llm    使用 LLMPlanner 语义分解（V0.9.2）
       ai-hub plan "<task>" --json   结构化 JSON 输出（V0.9.3）
     """
-    if not args:
-        print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
+    usage = (
+        'Usage: ai-hub plan "<composite task description>" '
+        '[--llm] [--json] [--provider NAME]'
+    )
+    try:
+        parsed_args, provider_name = extract_provider_option(args)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
         sys.exit(1)
 
-    json_output = "--json" in args
-    use_llm = "--llm" in args
-    task_args = [a for a in args if a not in ("--json", "--llm")]
+    if not parsed_args:
+        print(usage)
+        sys.exit(1)
+
+    json_output = "--json" in parsed_args
+    use_llm = "--llm" in parsed_args
+    task_args = [a for a in parsed_args if a not in ("--json", "--llm")]
     if not task_args:
-        print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
+        print(usage)
         sys.exit(1)
 
     text = " ".join(task_args)
@@ -135,7 +147,12 @@ def cmd_plan(args: list[str]) -> None:
         sys.exit(1)
 
     # 构建 Runtime（与 cmd_ask 一致）
-    registry = _build_registry()
+    try:
+        registry = narrow_registry(_build_registry(), provider_name)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
+        sys.exit(1)
     quota = QuotaManager()
     hr = HealthRegistry()
     router = MetricsRouter(registry, quota_manager=quota, health_registry=hr)

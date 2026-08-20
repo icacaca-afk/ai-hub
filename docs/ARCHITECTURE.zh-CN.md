@@ -58,6 +58,10 @@ Task → Capability → Provider → Bridge → Runtime → Result
 | `cli/` | 用户命令与展示层 | Experimental |
 | `adapters/` | MCP 等协议集成 | 扩展边界 |
 
+发布包同样是架构边界。Setuptools 只在维护中的项目命名空间下递归发现 Package，
+发布验证必须在源码目录外安装非 editable Wheel。CLI 固定 Provider 的实现是在
+Router 构造前收窄 Registry，不会绕过或修改 Router 行为。
+
 冻结规则由 [ADR-0008](adr/0008-core-freeze.md) 管理。当前仓库中，冻结范围包括
 `core/`、`router/router.py`、`router/health_router.py`、
 `router/score_router.py` 和现有 Provider 实现。Bug Fix 必须有明确理由；新的

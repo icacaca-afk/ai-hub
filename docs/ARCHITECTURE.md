@@ -59,6 +59,12 @@ The system unifies execution, not model semantics.
 | `cli/` | User-facing commands and presentation | Experimental |
 | `adapters/` | Protocol-facing integration such as MCP | Extension boundary |
 
+Distribution packaging is also an architecture boundary. Setuptools discovers
+packages recursively only below the maintained project namespaces, and release
+verification installs a non-editable wheel outside the checkout. CLI provider
+pinning narrows the registry before Router construction; it does not bypass or
+modify Router behavior.
+
 The freeze is governed by [ADR-0008](adr/0008-core-freeze.md). In the current
 repository it covers `core/`, `router/router.py`, `router/health_router.py`,
 `router/score_router.py`, and existing Provider implementations. Bug fixes need

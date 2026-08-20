@@ -34,6 +34,8 @@ CLI presentation document.
   provider implementations unchanged except for justified bug fixes.
 - Maintain English and Simplified Chinese versions of reader-facing documents.
 - Align package metadata with repository release tags.
+- Keep recursive wheel discovery and the account-free `--provider demo` smoke
+  path as release gates ([ADR-0037](adr/0037-clean-install-and-deterministic-demo.md)).
 - Refresh installation and provider-extension documentation against the actual
   contract tests.
 - Review the external Claude CLI Provider contribution after its requested

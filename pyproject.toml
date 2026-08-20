@@ -6,6 +6,12 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8,<9",
+    "mcp>=1,<2",
+]
+
 [project.scripts]
 ai-hub = "cli.main:main"
 
@@ -19,20 +25,13 @@ markers = [
     "live: marks tests as requiring live providers (deselect with '-m \"not live\"')",
 ]
 
-[tool.setuptools]
-packages = [
-    "core",
-    "router",
-    "cli",
-    "planner",
-    "providers",
-    "providers.demo",
-    "providers.gemini",
-    "providers.qoder",
-    "providers.openai_api",
-    "providers.openai_compatible",
-    "providers.fake_browser",
-    "providers.web_ai",
-    "adapters",
-    "scripts",
+[tool.setuptools.packages.find]
+include = [
+    "core*",
+    "router*",
+    "cli*",
+    "planner*",
+    "providers*",
+    "adapters*",
+    "scripts*",
 ]

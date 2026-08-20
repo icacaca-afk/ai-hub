@@ -56,9 +56,14 @@ python -m pip install -e .
 
 ai-hub status
 ai-hub caps
-ai-hub ask "Write a Python HTTP server"
-ai-hub plan "Analyze a CSV file and summarize the findings"
+ai-hub ask "Hello" --provider demo
+ai-hub plan "Say hello then summarize it" --provider demo --json
+ai-hub pipeline inspect --json
 ```
+
+The explicit Demo Provider path above is deterministic and requires no API key
+or external CLI. Omit `--provider demo` to use normal capability and health
+routing.
 
 Run the test suite without live-provider requirements:
 
@@ -75,8 +80,8 @@ markers and test documentation when you need a fully isolated run.
 
 | Command | Purpose |
 |---|---|
-| `ai-hub ask "<task>"` | Route and execute a single task |
-| `ai-hub plan "<task>"` | Decompose and execute a multi-step task |
+| `ai-hub ask "<task>" [--provider NAME]` | Route or explicitly pin and execute a single task |
+| `ai-hub plan "<task>" [--provider NAME]` | Decompose and execute a multi-step task |
 | `ai-hub explain-route "<task>"` | Explain provider selection |
 | `ai-hub status` / `doctor` | Inspect and diagnose providers |
 | `ai-hub benchmark` | Measure healthy provider latency and success |
@@ -85,6 +90,14 @@ markers and test documentation when you need a fully isolated run.
 | `ai-hub exec-history` / `stats` | Query persisted execution history |
 | `ai-hub quota` / `caps` | Show quota and capability information |
 | `ai-hub session` | Manage runtime sessions |
+
+## Clean-wheel release check
+
+A successful editable install is not sufficient release evidence. Build a
+wheel, install it in a fresh virtual environment, change to a directory outside
+the checkout, and run the three Demo commands from Quick start. This verifies
+that nested packages such as `planner.metrics`, `planner.stages`, and
+`providers.claude_cli` are present in the distribution.
 
 ## Architecture
 

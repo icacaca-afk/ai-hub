@@ -51,9 +51,13 @@ python -m pip install -e .
 
 ai-hub status
 ai-hub caps
-ai-hub ask "写一个 Python HTTP 服务"
-ai-hub plan "分析一个 CSV 文件并总结结论"
+ai-hub ask "你好" --provider demo
+ai-hub plan "先问候然后总结" --provider demo --json
+ai-hub pipeline inspect --json
 ```
+
+上面的显式 Demo Provider 路径不需要 API Key 或外部 CLI，结果可重复。省略
+`--provider demo` 时，继续使用正常的 Capability 与 Health 路由。
 
 运行不依赖在线 Provider 的测试基线：
 
@@ -70,8 +74,8 @@ python -m pytest tests/ -x -q \
 
 | 命令 | 用途 |
 |---|---|
-| `ai-hub ask "<任务>"` | 路由并执行单步任务 |
-| `ai-hub plan "<任务>"` | 拆解并执行多步任务 |
+| `ai-hub ask "<任务>" [--provider NAME]` | 路由或固定 Provider 后执行单步任务 |
+| `ai-hub plan "<任务>" [--provider NAME]` | 拆解并执行多步任务 |
 | `ai-hub explain-route "<任务>"` | 解释 Provider 选择结果 |
 | `ai-hub status` / `doctor` | 查看和诊断 Provider |
 | `ai-hub benchmark` | 测量健康 Provider 的延迟和成功率 |
@@ -80,6 +84,13 @@ python -m pytest tests/ -x -q \
 | `ai-hub exec-history` / `stats` | 查询持久化执行历史 |
 | `ai-hub quota` / `caps` | 查看额度和 Capability |
 | `ai-hub session` | 管理 Runtime Session |
+
+## 干净 Wheel 发布检查
+
+editable install 成功不能单独作为发布证据。必须构建 Wheel，在全新虚拟环境中安装，
+切换到源码目录以外，再执行“快速开始”中的三条 Demo 命令。该流程会验证
+`planner.metrics`、`planner.stages`、`providers.claude_cli` 等嵌套包确实进入
+发布产物。
 
 ## 架构
 

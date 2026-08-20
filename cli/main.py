@@ -28,6 +28,7 @@ from cli.inspect import cmd_inspect
 from cli.trace import cmd_trace
 from cli.history import cmd_exec_history
 from cli.pipeline_inspect import cmd_pipeline
+from cli.provider_selection import extract_provider_option, narrow_registry
 from cli.stats import cmd_stats
 
 
@@ -71,12 +72,25 @@ def _build_registry() -> CapabilityRegistry:
 
 
 def cmd_ask(args: list[str]) -> None:
-    if not args:
-        print('Usage: ai-hub ask "<task description>"')
+    usage = 'Usage: ai-hub ask "<task description>" [--provider NAME]'
+    try:
+        task_args, provider_name = extract_provider_option(args)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
         sys.exit(1)
 
-    text = " ".join(args)
-    registry = _build_registry()
+    if not task_args:
+        print(usage)
+        sys.exit(1)
+
+    text = " ".join(task_args)
+    try:
+        registry = narrow_registry(_build_registry(), provider_name)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
+        sys.exit(1)
     from core.quota import QuotaManager
     quota = QuotaManager()
     hr = HealthRegistry()
@@ -690,8 +704,8 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("AI Hub — One Task. Any AI. Any Runtime.\n")
         print("Usage:")
-        print('  ai-hub ask "<task>"    Execute a task (single step)')
-        print('  ai-hub plan "<task>"   Decompose + execute multi-step task (V0.9.1)')
+        print('  ai-hub ask "<task>" [--provider NAME]  Execute a task (single step)')
+        print('  ai-hub plan "<task>" [--provider NAME]  Decompose + execute multi-step task')
         print('  ai-hub plan "<task>" --json  Plan result as structured JSON (V0.9.3)')
         print('  ai-hub inspect <plan_id>     Inspect stored plan (V0.9.3)')
         print('  ai-hub inspect --list        List recent plans (V0.9.3)')
