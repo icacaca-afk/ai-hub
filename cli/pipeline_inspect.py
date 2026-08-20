@@ -6,8 +6,9 @@ import sys
 from typing import Any
 
 from planner.metadata_serialization import serialize_predicate, to_json
+from cli.version import __version__ as RUNTIME_VERSION
 
-RUNTIME_VERSION = "1.0.13"
+
 USAGE = "Usage: ai-hub pipeline inspect [--json]"
 
 

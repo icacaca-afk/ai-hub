@@ -1,6 +1,6 @@
 [project]
 name = "ai-hub"
-version = "0.0.1"
+dynamic = ["version"]
 description = "One command. Multiple AI providers. Free-first routing."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,3 +35,6 @@ include = [
     "adapters*",
     "scripts*",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "cli.version.__version__" }

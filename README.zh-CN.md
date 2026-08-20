@@ -25,8 +25,8 @@ Task → Capability → Provider → Bridge → Runtime → Result
 - 冻结边界：`core/`、`router/router.py`、`router/health_router.py`、
   `router/score_router.py` 和现有 Provider 实现，除 Bug Fix 外不修改
 
-目前 `pyproject.toml` 中的包版本仍是 `0.0.1`。在它与仓库标签统一前，以 Git
-tag 和 ADR 里程碑作为发布版本的事实来源。
+发布包元数据与 Runtime 检查现在共同以 `cli/version.py` 为版本事实来源。干净
+Wheel 验证必须确认二者都报告 `1.0.13`；已经发布的版本仍以 Git tag 标识。
 
 ## 主要能力
 
@@ -59,6 +59,10 @@ ai-hub pipeline inspect --json
 上面的显式 Demo Provider 路径不需要 API Key 或外部 CLI，结果可重复。省略
 `--provider demo` 时，继续使用正常的 Capability 与 Health 路由。
 
+MCP `list_providers` 默认只返回元数据，不启动外部 CLI 或认证检查。确实需要实时
+状态的 MCP 调用方可以显式传入 `probe_availability=true`；该操作可能持续到各
+Provider 探测超时。
+
 运行不依赖在线 Provider 的测试基线：
 
 ```bash
@@ -90,7 +94,9 @@ python -m pytest tests/ -x -q \
 editable install 成功不能单独作为发布证据。必须构建 Wheel，在全新虚拟环境中安装，
 切换到源码目录以外，再执行“快速开始”中的三条 Demo 命令。该流程会验证
 `planner.metrics`、`planner.stages`、`providers.claude_cli` 等嵌套包确实进入
-发布产物。
+发布产物。安装后的 Wheel 文件名必须对应 `1.0.13`，且
+`importlib.metadata.version("ai-hub")` 必须与
+`ai-hub pipeline inspect --json` 返回的 Runtime 版本一致。
 
 ## 架构
 

@@ -27,9 +27,9 @@ Task → Capability → Provider → Bridge → Runtime → Result
   `router/health_router.py`, `router/score_router.py`, and existing provider
   implementations are frozen except for bug fixes
 
-The package metadata in `pyproject.toml` still reports `0.0.1`; until that is
-aligned with repository tags, treat Git tags and ADR milestones as the release
-source of truth.
+Distribution metadata and runtime inspection now share
+`cli/version.py` as their version source. Clean-wheel verification must confirm
+that both report `1.0.13`; Git tags still identify published releases.
 
 ## What it provides
 
@@ -65,6 +65,11 @@ The explicit Demo Provider path above is deterministic and requires no API key
 or external CLI. Omit `--provider demo` to use normal capability and health
 routing.
 
+MCP `list_providers` is metadata-only by default and therefore does not launch
+external CLIs or authentication checks. MCP callers that explicitly need a
+live status may pass `probe_availability=true`; that operation can take as long
+as the configured Provider probes.
+
 Run the test suite without live-provider requirements:
 
 ```bash
@@ -97,7 +102,10 @@ A successful editable install is not sufficient release evidence. Build a
 wheel, install it in a fresh virtual environment, change to a directory outside
 the checkout, and run the three Demo commands from Quick start. This verifies
 that nested packages such as `planner.metrics`, `planner.stages`, and
-`providers.claude_cli` are present in the distribution.
+`providers.claude_cli` are present in the distribution. The installed wheel
+must be named for version `1.0.13`, and
+`importlib.metadata.version("ai-hub")` must equal the runtime version reported
+by `ai-hub pipeline inspect --json`.
 
 ## Architecture
 

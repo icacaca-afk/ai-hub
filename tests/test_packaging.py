@@ -26,6 +26,10 @@ def test_required_nested_packages_are_discoverable():
     assert REQUIRED_NESTED_PACKAGES <= discovered
 
 
+def test_cli_is_regular_package_to_avoid_third_party_module_collision():
+    assert (ROOT / "cli" / "__init__.py").is_file()
+
+
 def test_pyproject_uses_recursive_package_discovery():
     packages = _config()["tool"]["setuptools"]["packages"]
     assert isinstance(packages, dict)
@@ -49,3 +53,20 @@ def test_test_extra_pins_compatible_mcp_major():
     test_dependencies = _config()["project"]["optional-dependencies"]["test"]
     assert "pytest>=8,<9" in test_dependencies
     assert "mcp>=1,<2" in test_dependencies
+
+
+def test_distribution_version_comes_from_runtime_source():
+    config = _config()
+    assert "version" not in config["project"]
+    assert "version" in config["project"]["dynamic"]
+    assert config["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "cli.version.__version__",
+    }
+
+
+def test_runtime_and_pipeline_versions_match():
+    from cli import version
+    from cli.pipeline_inspect import RUNTIME_VERSION
+
+    assert version.__version__ == "1.0.13"
+    assert RUNTIME_VERSION == version.__version__

@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +29,19 @@ class MCPClient:
         self.timeout = timeout
         self.proc: subprocess.Popen | None = None
         self._next_id = 1
+        self._stdout_lines: queue.Queue[str | None] = queue.Queue()
+        self._stderr_tail: deque[str] = deque(maxlen=20)
+
+    def _read_stdout(self):
+        try:
+            for line in self.proc.stdout:
+                self._stdout_lines.put(line)
+        finally:
+            self._stdout_lines.put(None)
+
+    def _read_stderr(self):
+        for line in self.proc.stderr:
+            self._stderr_tail.append(line.rstrip())
 
     def start(self):
         env = dict(os.environ)
@@ -40,6 +57,8 @@ class MCPClient:
             cwd=str(_PROJECT_ROOT),
             env=env,
         )
+        threading.Thread(target=self._read_stdout, daemon=True).start()
+        threading.Thread(target=self._read_stderr, daemon=True).start()
 
     def send(self, method: str, params: dict | None = None, *, is_notification: bool = False) -> int | None:
         msg = {"jsonrpc": "2.0", "method": method}
@@ -59,11 +78,28 @@ class MCPClient:
     def read_response(self, expected_id: int, timeout: float = 30.0) -> dict:
         """读取 stdout 直到找到匹配 id 的响应。"""
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            line = self.proc.stdout.readline()
-            if not line:
-                time.sleep(0.1)
-                continue
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                detail = "\n".join(self._stderr_tail)
+                raise TimeoutError(
+                    f"No response with id={expected_id} within {timeout}s; "
+                    f"process={self.proc.poll()}; stderr={detail!r}"
+                )
+            try:
+                line = self._stdout_lines.get(timeout=remaining)
+            except queue.Empty as error:
+                detail = "\n".join(self._stderr_tail)
+                raise TimeoutError(
+                    f"No response with id={expected_id} within {timeout}s; "
+                    f"process={self.proc.poll()}; stderr={detail!r}"
+                ) from error
+            if line is None:
+                detail = "\n".join(self._stderr_tail)
+                raise RuntimeError(
+                    f"MCP server stdout closed before id={expected_id}; "
+                    f"process={self.proc.poll()}; stderr={detail!r}"
+                )
             line = line.strip()
             if not line or not line.startswith("{"):
                 continue
@@ -73,7 +109,6 @@ class MCPClient:
                     return data
             except json.JSONDecodeError:
                 continue
-        raise TimeoutError(f"No response with id={expected_id} within {timeout}s")
 
     def initialize(self) -> dict:
         self.start()
@@ -221,3 +256,54 @@ class TestFakeProviderE2E:
             assert data["code"] in ("NO_PROVIDER", "PROVIDER_FAILED", "PROVIDER_UNAVAILABLE")
             assert isinstance(data["error"], str)
             assert data["retryable"] in (True, False)
+
+
+class TestListProvidersProbePolicy:
+    @staticmethod
+    def _provider(available):
+        return SimpleNamespace(
+            name="probe",
+            display_name="Probe Provider",
+            capabilities=["general.chat"],
+            priority=1,
+            bridge=SimpleNamespace(),
+            available=available,
+        )
+
+    def test_default_listing_does_not_probe_external_provider(self, monkeypatch):
+        from adapters import marvis_mcp_server as server
+
+        calls = []
+        provider = self._provider(lambda: calls.append(True) or True)
+        monkeypatch.setattr(
+            server,
+            "_get_registry",
+            lambda: SimpleNamespace(all=lambda: [provider]),
+        )
+
+        result = server.list_providers()
+
+        assert calls == []
+        assert result["providers"][0]["available"] is None
+        assert result["providers"][0]["availability"] == "unchecked"
+
+    @pytest.mark.parametrize(
+        ("is_available", "expected_state"),
+        [(True, "available"), (False, "unavailable")],
+    )
+    def test_explicit_listing_probe_reports_state(
+        self, monkeypatch, is_available, expected_state
+    ):
+        from adapters import marvis_mcp_server as server
+
+        provider = self._provider(lambda: is_available)
+        monkeypatch.setattr(
+            server,
+            "_get_registry",
+            lambda: SimpleNamespace(all=lambda: [provider]),
+        )
+
+        result = server.list_providers(probe_availability=True)
+
+        assert result["providers"][0]["available"] is is_available
+        assert result["providers"][0]["availability"] == expected_state

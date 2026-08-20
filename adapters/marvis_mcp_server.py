@@ -285,8 +285,14 @@ def run_provider(task: dict) -> dict:
 
 
 @mcp.tool()
-def list_providers() -> dict:
-    """列出 ai-hub 当前已注册的所有 Provider 及其状态。
+def list_providers(probe_availability: bool = False) -> dict:
+    """列出 ai-hub 当前已注册的所有 Provider。
+
+    默认只返回本地元数据，不执行外部 CLI、认证或网络探测。仅当调用方显式
+    设置 ``probe_availability=true`` 时才检查 Provider 可用性；探测可能较慢。
+
+    Args:
+        probe_availability: 是否显式执行 Provider 可用性探测，默认 false。
 
     Returns:
         {
@@ -294,7 +300,8 @@ def list_providers() -> dict:
                 {
                     "name": str,
                     "display_name": str,
-                    "available": bool,
+                    "available": bool | null,
+                    "availability": "available" | "unavailable" | "unchecked",
                     "capabilities": list[str],
                     "priority": int,
                     "bridge_type": str,
@@ -305,19 +312,36 @@ def list_providers() -> dict:
     try:
         registry = _get_registry()
         providers = registry.all()
-        return {
-            "providers": [
+        result = []
+        for provider in providers:
+            available = None
+            availability = "unchecked"
+            if probe_availability:
+                try:
+                    available = bool(provider.available())
+                    availability = "available" if available else "unavailable"
+                except Exception as error:
+                    available = False
+                    availability = "unavailable"
+                    logger.warning(
+                        "Availability probe failed for %s: %s",
+                        provider.name,
+                        error,
+                    )
+
+            result.append(
                 {
-                    "name": p.name,
-                    "display_name": p.display_name,
-                    "available": p.available(),
-                    "capabilities": p.capabilities,
-                    "priority": p.priority,
-                    "bridge_type": type(p.bridge).__name__,
+                    "name": provider.name,
+                    "display_name": provider.display_name,
+                    "available": available,
+                    "availability": availability,
+                    "capabilities": provider.capabilities,
+                    "priority": provider.priority,
+                    "bridge_type": type(provider.bridge).__name__,
                 }
-                for p in providers
-            ],
-        }
+            )
+
+        return {"providers": result}
     except Exception as e:
         return {"providers": [], "error": str(e)}
 

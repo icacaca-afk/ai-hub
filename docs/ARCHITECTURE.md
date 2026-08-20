@@ -63,7 +63,14 @@ Distribution packaging is also an architecture boundary. Setuptools discovers
 packages recursively only below the maintained project namespaces, and release
 verification installs a non-editable wheel outside the checkout. CLI provider
 pinning narrows the registry before Router construction; it does not bypass or
-modify Router behavior.
+modify Router behavior. `cli/version.py` is the single source for both wheel
+metadata and runtime inspection, and `cli/` is a regular package so unrelated
+third-party `cli.py` modules cannot shadow the application entry point.
+
+MCP discovery is observational by default: `list_providers` returns registered
+metadata with availability marked `unchecked` and performs no external probe.
+Availability probing is an explicit caller choice because it may launch CLI,
+authentication, browser, or network checks.
 
 The freeze is governed by [ADR-0008](adr/0008-core-freeze.md). In the current
 repository it covers `core/`, `router/router.py`, `router/health_router.py`,

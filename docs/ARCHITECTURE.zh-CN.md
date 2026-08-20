@@ -60,7 +60,13 @@ Task → Capability → Provider → Bridge → Runtime → Result
 
 发布包同样是架构边界。Setuptools 只在维护中的项目命名空间下递归发现 Package，
 发布验证必须在源码目录外安装非 editable Wheel。CLI 固定 Provider 的实现是在
-Router 构造前收窄 Registry，不会绕过或修改 Router 行为。
+Router 构造前收窄 Registry，不会绕过或修改 Router 行为。`cli/version.py` 是
+Wheel 元数据与 Runtime 检查的单一版本源；`cli/` 是正规 Package，避免被环境中
+无关的 `cli.py` 模块遮蔽入口。
+
+MCP 发现默认只观察元数据：`list_providers` 把可用性标记为 `unchecked`，不执行
+外部探测。由于探测可能启动 CLI、认证、浏览器或网络检查，只有调用方显式要求时
+才执行。
 
 冻结规则由 [ADR-0008](adr/0008-core-freeze.md) 管理。当前仓库中，冻结范围包括
 `core/`、`router/router.py`、`router/health_router.py`、
