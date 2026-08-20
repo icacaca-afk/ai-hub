@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import sys
 
@@ -61,6 +62,15 @@ _TRACE_COLLECTOR.attach(_EVENT_BUS)
 # cmd_exec_history 读取此 store。
 _SQLITE_STORE = SQLiteExecutionStore()
 _SQLITE_STORE.attach(_EVENT_BUS)
+
+
+def _close_runtime_state() -> None:
+    """Release process-owned persistence resources during interpreter exit."""
+    _SQLITE_STORE.detach()
+    _SQLITE_STORE.close()
+
+
+atexit.register(_close_runtime_state)
 
 
 def get_plan_store() -> PlanStore:

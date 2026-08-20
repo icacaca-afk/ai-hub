@@ -116,10 +116,28 @@ def _build_router(providers, health_reports_names=None):
     return MetricsRouter(registry, quota_manager=FakeQuota(), health_registry=hr)
 
 
+def _execute_legacy(router, task):
+    """Execute the V1.x compatibility shim and assert its deprecation signal."""
+    with pytest.warns(DeprecationWarning, match=r"MetricsRouter\.execute\(\)"):
+        return router.execute(task)
+
+
 # ── OpenAI usage 提取测试 ──
 
 class TestMetricsRouterExecute:
     """MetricsRouter.execute() server_metrics 提取测试。"""
+
+    def test_deprecation_contract_retains_v1_compatibility(self):
+        router = _build_router([])
+        task = Task(content="hello", capabilities=["code.generate"])
+
+        with pytest.warns(DeprecationWarning) as captured:
+            router.execute(task)
+
+        message = str(captured[0].message)
+        assert "ExecutionPipeline + MetricsStage" in message
+        assert "retained throughout V1.x" in message
+        assert "V1.0.3" not in message
 
     def test_execute_openai_api_with_usage(self):
         """openai_api provider + br.raw=JSON(usage) → metadata含 server_metrics。"""
@@ -137,7 +155,7 @@ class TestMetricsRouterExecute:
 
         # 显式指定 capabilities 避免 Task 自动分类为 general.chat
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert result.is_success
         assert result.provider == "openai_api"
@@ -162,7 +180,7 @@ class TestMetricsRouterExecute:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert result.is_success
         sm = result.metadata["server_metrics"]
@@ -176,7 +194,7 @@ class TestMetricsRouterExecute:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert "server_metrics" in result.metadata
 
@@ -187,7 +205,7 @@ class TestMetricsRouterExecute:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert result.is_success
         assert result.metadata["server_metrics"] == {}
@@ -200,7 +218,7 @@ class TestMetricsRouterExecute:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert not result.is_success
         assert result.status == "failed"
@@ -214,7 +232,7 @@ class TestMetricsRouterExecute:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert result.is_success
         assert result.metadata["server_metrics"] == {}
@@ -227,7 +245,7 @@ class TestMetricsRouterExecute:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         md = result.metadata
         assert "duration_ms" in md
@@ -249,7 +267,7 @@ class TestMetricsRouterNoProvider:
         router = _build_router([])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         assert result.status == "failed"
         assert result.provider == "none"
@@ -259,7 +277,7 @@ class TestMetricsRouterNoProvider:
         router = _build_router([])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        result = router.execute(task)
+        result = _execute_legacy(router, task)
 
         # 无 provider 路径不构造 server_metrics
         assert "server_metrics" not in result.metadata
@@ -296,8 +314,8 @@ class TestMetricsRouterRouting:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        r1 = router.execute(task)
-        r2 = router.execute(task)
+        r1 = _execute_legacy(router, task)
+        r2 = _execute_legacy(router, task)
 
         assert r1.provider == r2.provider == "openai_api"
 
@@ -309,7 +327,7 @@ class TestMetricsRouterRouting:
         router = _build_router([provider])
 
         task = Task(content="hello", capabilities=["code.generate"])
-        router.execute(task)
+        _execute_legacy(router, task)
 
         # ScoreRouter.route() 会填充 last_scores
         assert hasattr(router, "last_scores")

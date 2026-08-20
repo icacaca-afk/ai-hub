@@ -25,6 +25,25 @@ from core.result import Result
 from core.task import Task
 
 
+def test_runtime_state_cleanup_detaches_and_closes_sqlite_store(monkeypatch):
+    from cli import plan as plan_module
+
+    calls = []
+
+    class FakeStore:
+        def detach(self):
+            calls.append("detach")
+
+        def close(self):
+            calls.append("close")
+
+    monkeypatch.setattr(plan_module, "_SQLITE_STORE", FakeStore())
+
+    plan_module._close_runtime_state()
+
+    assert calls == ["detach", "close"]
+
+
 def _run_cli(*args, timeout=30):
     """运行 ai-hub CLI 命令（subprocess）。"""
     cmd = [sys.executable, "-m", "cli.main"] + list(args)

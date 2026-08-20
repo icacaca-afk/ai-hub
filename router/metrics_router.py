@@ -13,14 +13,14 @@
 # V1.0.1 退出路径（ADR-0021 9.95/10 FINAL APPROVED）:
 #   - 选中 ExecutionPipeline as Decorator / Middleware 路径
 #   - MetricsStage 取代 MetricsRouter.execute() 装饰
-#   - MetricsRouter 保留向后兼容（V1.0.3 删除）
+#   - MetricsRouter 在 V1.x 保留向后兼容；删除需要独立的破坏性变更 ADR
 #
 #   新代码应该用：
 #       from planner.pipeline import default_pipeline
 #       pipeline = default_pipeline(score_router, quota=quota)
 #       result = pipeline.run(task)
 #
-# API Stability: Deprecated（V1.0.3 删除）
+# API Stability: Deprecated（V1.x 兼容保留）
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from router.score_router import ScoreRouter
 class MetricsRouter(ScoreRouter):
     """ScoreRouter 子类：在 execute() 中额外提取 server_metrics。
 
-    ⚠️ DEPRECATED since V1.0.1 (ADR-0021). Will be removed in V1.0.3.
+    ⚠️ DEPRECATED since V1.0.1 (ADR-0021). Retained throughout V1.x.
 
     route() 完全继承 ScoreRouter，不影响路由决策。
     execute() 在 bridge.run() 之后调用 MetricsExtractor.extract()，
@@ -66,7 +66,8 @@ class MetricsRouter(ScoreRouter):
             "from planner.pipeline import default_pipeline; "
             "pipeline = default_pipeline(router, quota=quota); "
             "result = pipeline.run(task). "
-            "Will be removed in V1.0.3.",
+            "This compatibility shim is retained throughout V1.x; removal "
+            "requires a separately approved breaking-change ADR.",
             DeprecationWarning,
             stacklevel=2,
         )
