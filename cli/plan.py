@@ -112,6 +112,9 @@ def _build_registry():
     from providers.qoder.provider import QoderProvider
     registry.register(QoderProvider())
 
+    from providers.trae_cli.provider import TraeCLIProvider
+    registry.register(TraeCLIProvider())
+
     from providers.fake_browser.provider import FakeBrowserProvider
     registry.register(FakeBrowserProvider())
 

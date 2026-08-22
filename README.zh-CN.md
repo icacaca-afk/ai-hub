@@ -59,6 +59,10 @@ ai-hub pipeline inspect --json
 上面的显式 Demo Provider 路径不需要 API Key 或外部 CLI，结果可重复。省略
 `--provider demo` 时，继续使用正常的 Capability 与 Health 路由。
 
+如果已经安装 Trae CLI 并配置有效模型，可以使用 `--provider trae_cli` 将任务
+分发给 Trae Work。AI Hub 会先运行 `trae-cli doctor`，未配置模型时会在路由阶段
+报告不可用，而不是执行到一半才失败。
+
 MCP `list_providers` 默认只返回元数据，不启动外部 CLI 或认证检查。确实需要实时
 状态的 MCP 调用方可以显式传入 `probe_availability=true`；该操作可能持续到各
 Provider 探测超时。

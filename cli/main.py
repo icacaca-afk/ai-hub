@@ -62,6 +62,9 @@ def _build_registry() -> CapabilityRegistry:
     from providers.claude_cli.provider import ClaudeCLIProvider
     registry.register(ClaudeCLIProvider())
 
+    from providers.trae_cli.provider import TraeCLIProvider
+    registry.register(TraeCLIProvider())
+
     from providers.fake_browser.provider import FakeBrowserProvider
     registry.register(FakeBrowserProvider())
 

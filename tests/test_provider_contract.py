@@ -186,6 +186,14 @@ def test_claude_provider_contract():
     print("✅ test_claude_provider_contract passed")
 
 
+def test_trae_cli_provider_contract():
+    """Trae CLI Provider must satisfy the stable Provider boundary."""
+    from providers.trae_cli.provider import TraeCLIProvider
+    errors = check_contract(TraeCLIProvider)
+    assert not errors, f"TraeCLIProvider contract violations: {errors}"
+    print("✅ test_trae_cli_provider_contract passed")
+
+
 def test_capability_metadata_consistency():
     """Every capability declared by a Provider must exist in the CAPABILITIES registry."""
     from core.capabilities import CAPABILITIES
@@ -195,6 +203,7 @@ def test_capability_metadata_consistency():
     from providers.openai_api.provider import OpenAIAPIProvider
     from providers.web_ai.provider import WebAIProvider
     from providers.claude_cli.provider import ClaudeCLIProvider
+    from providers.trae_cli.provider import TraeCLIProvider
 
     providers = [
         DemoProvider,
@@ -203,6 +212,7 @@ def test_capability_metadata_consistency():
         OpenAIAPIProvider,
         WebAIProvider,
         ClaudeCLIProvider,
+        TraeCLIProvider,
     ]
     for p_class in providers:
         for cap in p_class.metadata.capabilities:
@@ -223,6 +233,7 @@ def run_all():
         test_web_ai_provider_contract,
         test_marvis_provider_contract,
         test_claude_provider_contract,
+        test_trae_cli_provider_contract,
         test_zero_modification_kpi,
         test_capability_metadata_consistency,
     ]

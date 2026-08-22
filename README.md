@@ -65,6 +65,11 @@ The explicit Demo Provider path above is deterministic and requires no API key
 or external CLI. Omit `--provider demo` to use normal capability and health
 routing.
 
+When Trae CLI is installed and configured with an effective model, use
+`--provider trae_cli` to dispatch a task to Trae Work. AI Hub runs
+`trae-cli doctor` before routing so an unconfigured Trae installation is
+reported as unavailable instead of failing during execution.
+
 MCP `list_providers` is metadata-only by default and therefore does not launch
 external CLIs or authentication checks. MCP callers that explicitly need a
 live status may pass `probe_availability=true`; that operation can take as long
