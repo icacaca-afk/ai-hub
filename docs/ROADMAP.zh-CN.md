@@ -36,13 +36,13 @@ DSL 或 Expression Engine。V1.0.13 保持 canonical Pipeline Schema 不变，�
 - 将递归 Wheel 包发现和无需账号的 `--provider demo` 冒烟路径保持为发布门禁
   （[ADR-0037](adr/0037-clean-install-and-deterministic-demo.md)）。
 - 按实际 Contract Test 更新安装和 Provider 扩展文档。
-- 外部 Claude CLI Provider PR 完成所要求的修改与 Rebase 后再审核。
+- 外部 Claude CLI Provider 贡献已通过 PR #3 合并
+  （[ADR-0036](adr/0036-claude-cli-integration.md)）。
 
 ## 后续候选
 
 以下方向都需要独立 ADR，目前不是承诺：
 
-- Pipeline 结构与 Predicate 语义的 CLI 可视化
 - Metadata Schema Versioning
 - 仅在 callable 元数据不足时评估受限的结构化 Predicate
 - 通过既有 Provider/Bridge 边界增加 Provider

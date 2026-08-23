@@ -14,14 +14,13 @@ Task → Capability → Provider → Bridge → Runtime → Result
 
 ## 项目状态
 
-- 仓库最新版本：**V1.0.11**（tag `v1.0.11`）
-- 当前里程碑：Pipeline Introspection，见
-  [ADR-0032](docs/adr/0032-pipeline-introspection.md)
-- V1.0.12 Predicate API 已在本地实现，等待发布审核，见
-  [ADR-0033](docs/adr/0033-predicate-api.md)
-- V1.0.13 `pipeline inspect` 已在本地实现，等待外部审核，见
+- 当前发布线：**V1.0.13**（发布候选；正式发布以不可变 Git tag 标识）
+- V1.0.12 Predicate API，见 [ADR-0033](docs/adr/0033-predicate-api.md)
+- V1.0.13 CLI Pipeline Introspection（`pipeline inspect`），见
   [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
-- V1.0.11 发布时验证基线：**602 项测试通过**
+- 候选验证基线：完整 non-live 回归 **1106 通过 / 1 跳过**、干净 Wheel 安装
+  验证、CLI 与 MCP 黑盒 smoke —— 见
+  [V1.0.13 发布记录](docs/releases/2026-08-23-v1.0.13-release-record.md)
 - 冻结边界：`core/`、`router/router.py`、`router/health_router.py`、
   `router/score_router.py` 和现有 Provider 实现，除 Bug Fix 外不修改
 

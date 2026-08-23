@@ -15,14 +15,14 @@ Task → Capability → Provider → Bridge → Runtime → Result
 
 ## Project status
 
-- Latest repository release: **V1.0.11** (`v1.0.11`)
-- Current milestone: Pipeline Introspection, described by
-  [ADR-0032](docs/adr/0032-pipeline-introspection.md)
-- V1.0.12 Predicate API is implemented locally and awaiting release review; see
-  [ADR-0033](docs/adr/0033-predicate-api.md)
-- V1.0.13 `pipeline inspect` is implemented locally and awaiting external
-  review; see [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
-- V1.0.11 verification baseline: **602 passing tests** at release time
+- Current release line: **V1.0.13** (release candidate; the immutable Git tag
+  identifies the published release)
+- V1.0.12 Predicate API, described by [ADR-0033](docs/adr/0033-predicate-api.md)
+- V1.0.13 CLI pipeline introspection (`pipeline inspect`), described by
+  [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
+- Candidate verification baseline: **1106 passed / 1 skipped** full non-live
+  regression, clean-wheel install checks, CLI and MCP black-box smokes — see
+  [the V1.0.13 release record](docs/releases/2026-08-23-v1.0.13-release-record.md)
 - Stability boundary: `core/`, `router/router.py`,
   `router/health_router.py`, `router/score_router.py`, and existing provider
   implementations are frozen except for bug fixes

@@ -38,14 +38,13 @@ CLI presentation document.
   path as release gates ([ADR-0037](adr/0037-clean-install-and-deterministic-demo.md)).
 - Refresh installation and provider-extension documentation against the actual
   contract tests.
-- Review the external Claude CLI Provider contribution after its requested
-  changes are pushed and rebased.
+- The external Claude CLI Provider contribution was merged through PR #3
+  ([ADR-0036](adr/0036-claude-cli-integration.md)).
 
 ## Later candidates
 
 The following ideas require their own ADR and are not commitments:
 
-- CLI visualization of pipeline structure and predicate semantics
 - Metadata schema versioning
 - Restricted structured predicates, only if callable metadata proves
   insufficient
