@@ -23,7 +23,6 @@ from core.history import HistoryStore
 from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from cli.explain_route import cmd_explain_route
-from cli.plan import cmd_plan
 from cli.inspect import cmd_inspect
 from cli.trace import cmd_trace
 from cli.history import cmd_exec_history
@@ -35,40 +34,12 @@ from cli.stats import cmd_stats
 def _build_registry() -> CapabilityRegistry:
     """构建 CapabilityRegistry。
 
-    V0.1.1: 全量注册 5 个 Provider，验证 Zero-Modification KPI。
-    - demo       (FakeBridge)  — 基线
-    - gemini_cli (CLIBridge)   — V0.1 真实接入
-    - stub       (CLIBridge)   — V0.1.1 架构验证（同类型第二个）
-    - openai_api (APIBridge)   — V0.1 真实接入
-    - qoder      (CLIBridge)   — 注册但 CLI 不可用时自动降级
+    V1.0.13 审核：委托给 cli.provider_registry.build_default_registry，
+    与 plan / pipeline introspection 共用单一注册来源，防止各入口漂移。
     """
-    registry = CapabilityRegistry()
+    from cli.provider_registry import build_default_registry
 
-    from providers.demo.provider import DemoProvider
-    registry.register(DemoProvider())
-
-    from providers.gemini.provider import GeminiCLIProvider
-    registry.register(GeminiCLIProvider())
-
-    from providers.stub.provider import StubProvider
-    registry.register(StubProvider())
-
-    from providers.openai_api.provider import OpenAIAPIProvider
-    registry.register(OpenAIAPIProvider())
-
-    from providers.qoder.provider import QoderProvider
-    registry.register(QoderProvider())
-
-    from providers.claude_cli.provider import ClaudeCLIProvider
-    registry.register(ClaudeCLIProvider())
-
-    from providers.fake_browser.provider import FakeBrowserProvider
-    registry.register(FakeBrowserProvider())
-
-    from providers.web_ai.provider import WebAIProvider
-    registry.register(WebAIProvider())
-
-    return registry
+    return build_default_registry()
 
 
 def cmd_ask(args: list[str]) -> None:
@@ -700,6 +671,19 @@ def cmd_benchmark(args: list[str]) -> None:
     print("Benchmark complete.")
 
 
+def _cmd_plan(args: list[str]) -> None:
+    """惰性分发 plan 命令。
+
+    cli.plan 在导入时会初始化 SQLiteExecutionStore 等持久单例；
+    只有用到 plan/inspect/trace/history 族命令时才允许付出该代价，
+    保证 `ai-hub pipeline inspect`、`ask` 等路径零磁盘副作用
+    （V1.0.13 审核 P1：introspection 必须无持久化副作用）。
+    """
+    from cli.plan import cmd_plan
+
+    cmd_plan(args)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("AI Hub — One Task. Any AI. Any Runtime.\n")
@@ -732,7 +716,7 @@ def main() -> None:
 
     commands = {
         "ask": cmd_ask,
-        "plan": cmd_plan,
+        "plan": _cmd_plan,
         "pipeline": cmd_pipeline,
         "inspect": cmd_inspect,
         "trace": cmd_trace,

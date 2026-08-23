@@ -200,3 +200,74 @@ class TestMainRegistration:
             main_module.main()
         assert exc.value.code == 0
         assert "ai-hub pipeline inspect" in capsys.readouterr().out
+
+
+class TestDefaultPipelineShape:
+    """V1.0.13 审核 P1：introspection 必须描述 plan 实际运行的默认 Pipeline。"""
+
+    def test_inspection_matches_plan_executor_default_pipeline(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)  # 持久产物（quota.db 等）落在临时目录
+        from cli.pipeline_inspect import _build_default_pipeline
+        from cli.pipeline_inspect import build_pipeline_inspection
+        from cli.plan import _EVENT_BUS, _PLAN_STORE
+        from cli.provider_registry import build_default_registry
+        from core.health_registry import HealthRegistry
+        from core.quota import QuotaManager
+        from planner.executor import PlanExecutor
+        from planner.rule_based_planner import RuleBasedPlanner
+        from router.metrics_router import MetricsRouter
+
+        quota = QuotaManager()
+        router = MetricsRouter(
+            build_default_registry(), quota_manager=quota, health_registry=HealthRegistry()
+        )
+        executor = PlanExecutor(
+            router=router,
+            planner=RuleBasedPlanner(),
+            plan_store=_PLAN_STORE,
+            event_bus=_EVENT_BUS,
+        )
+        reference = build_pipeline_inspection(executor.pipeline)["pipeline"]
+        reported = build_pipeline_inspection(_build_default_pipeline())["pipeline"]
+
+        assert reported == reference
+        # cmd_plan 的 PlanExecutor 默认不传 quota，introspection 不得失真为 true
+        assert reported["has_quota"] is False
+
+
+class TestInspectSideEffects:
+    """V1.0.13 审核 P1："只读 introspection"不得在磁盘留下持久状态。"""
+
+    def _run_isolated(self, tmp_path, *argv):
+        import os
+        import subprocess
+        from pathlib import Path
+
+        root = str(Path(__file__).resolve().parents[1])
+        env = dict(os.environ, PYTHONPATH=root)
+        return subprocess.run(
+            [sys.executable, *argv],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    def test_importing_main_creates_no_persistent_state(self, tmp_path):
+        proc = self._run_isolated(tmp_path, "-c", "import cli.main")
+        assert proc.returncode == 0, proc.stderr
+        assert not (tmp_path / ".ai-hub").exists()
+
+    def test_pipeline_inspect_creates_no_persistent_state(self, tmp_path):
+        proc = self._run_isolated(
+            tmp_path, "-m", "cli.main", "pipeline", "inspect", "--json"
+        )
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout)
+        assert payload["pipeline"]["has_quota"] is False
+        assert not (tmp_path / ".ai-hub").exists(), (
+            "pipeline inspect must not create .ai-hub/*.db"
+        )

@@ -70,3 +70,17 @@ def test_runtime_and_pipeline_versions_match():
 
     assert version.__version__ == "1.0.13"
     assert RUNTIME_VERSION == version.__version__
+
+
+def test_mcp_runtime_extra_is_declared():
+    """V1.0.13 审核 P1：MCP 适配器必须有可安装的运行时 extra。"""
+    extras = _config()["project"]["optional-dependencies"]
+    assert extras["mcp"] == ["mcp>=1,<2"]
+
+
+def test_mcp_adapter_documented_for_installs():
+    """双语 README 必须写明 [mcp] extra 与 wheel 安装态的正确入口。"""
+    for name in ("README.md", "README.zh-CN.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert '".[mcp]"' in text, name
+        assert "python -m adapters.marvis_mcp_server" in text, name

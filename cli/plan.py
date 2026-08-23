@@ -93,32 +93,15 @@ _history_module.set_execution_store(_SQLITE_STORE)
 
 
 def _build_registry():
-    """构建 CapabilityRegistry（与 cli/main.py 一致）。"""
-    from core.registry import CapabilityRegistry
-    registry = CapabilityRegistry()
+    """构建 CapabilityRegistry。
 
-    from providers.demo.provider import DemoProvider
-    registry.register(DemoProvider())
+    V1.0.13 审核：委托给 cli.provider_registry.build_default_registry，
+    与 `ai-hub ask` 保持同一注册来源（此前缺 claude_cli 导致
+    `plan --provider claude_cli` 报 Unknown provider）。
+    """
+    from cli.provider_registry import build_default_registry
 
-    from providers.gemini.provider import GeminiCLIProvider
-    registry.register(GeminiCLIProvider())
-
-    from providers.stub.provider import StubProvider
-    registry.register(StubProvider())
-
-    from providers.openai_api.provider import OpenAIAPIProvider
-    registry.register(OpenAIAPIProvider())
-
-    from providers.qoder.provider import QoderProvider
-    registry.register(QoderProvider())
-
-    from providers.fake_browser.provider import FakeBrowserProvider
-    registry.register(FakeBrowserProvider())
-
-    from providers.web_ai.provider import WebAIProvider
-    registry.register(WebAIProvider())
-
-    return registry
+    return build_default_registry()
 
 
 def cmd_plan(args: list[str]) -> None:

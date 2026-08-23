@@ -2,7 +2,7 @@
 
 > 更新时间：2026-08-23（由 2026-08-13 版本更新）
 > 当前状态：**V1.0.13 发布候选**（分支 `release/v1.0.13-integration`，代码基线 `33dc88a`，外部审核进行中；正式发布以不可变 tag 标识）
-> 测试基线：完整 non-live 回归 **1106 passed / 1 skipped**（354s），详见 [docs/releases/2026-08-23-v1.0.13-release-record.md](docs/releases/2026-08-23-v1.0.13-release-record.md)
+> 测试基线：完整 non-live 回归 **1113 passed / 1 skipped**（425s），详见 [docs/releases/2026-08-23-v1.0.13-release-record.md](docs/releases/2026-08-23-v1.0.13-release-record.md)
 > 仓库：https://github.com/icacaca-afk/ai-hub
 
 ---

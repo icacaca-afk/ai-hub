@@ -18,8 +18,8 @@ Task → Capability → Provider → Bridge → Runtime → Result
 - V1.0.12 Predicate API，见 [ADR-0033](docs/adr/0033-predicate-api.md)
 - V1.0.13 CLI Pipeline Introspection（`pipeline inspect`），见
   [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
-- 候选验证基线：完整 non-live 回归 **1106 通过 / 1 跳过**、干净 Wheel 安装
-  验证、CLI 与 MCP 黑盒 smoke —— 见
+- 候选验证基线：完整 non-live 回归 **1113 通过 / 1 跳过**、干净 Wheel 安装
+  验证（含 `[mcp]` extra）、CLI 与 MCP 黑盒 smoke —— 见
   [V1.0.13 发布记录](docs/releases/2026-08-23-v1.0.13-release-record.md)
 - 冻结边界：`core/`、`router/router.py`、`router/health_router.py`、
   `router/score_router.py` 和现有 Provider 实现，除 Bug Fix 外不修改
@@ -47,6 +47,10 @@ Key 或完成登录。
 git clone https://github.com/icacaca-afk/ai-hub.git
 cd ai-hub
 python -m pip install -e .
+
+# 可选：MCP 适配器运行时（通过 stdio MCP 暴露 ai-hub 能力）
+python -m pip install -e ".[mcp]"
+python -m adapters.marvis_mcp_server
 
 ai-hub status
 ai-hub caps

@@ -20,8 +20,9 @@ Task → Capability → Provider → Bridge → Runtime → Result
 - V1.0.12 Predicate API, described by [ADR-0033](docs/adr/0033-predicate-api.md)
 - V1.0.13 CLI pipeline introspection (`pipeline inspect`), described by
   [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
-- Candidate verification baseline: **1106 passed / 1 skipped** full non-live
-  regression, clean-wheel install checks, CLI and MCP black-box smokes — see
+- Candidate verification baseline: **1113 passed / 1 skipped** full non-live
+  regression, clean-wheel install checks (incl. `[mcp]` extra), CLI and MCP
+  black-box smokes — see
   [the V1.0.13 release record](docs/releases/2026-08-23-v1.0.13-release-record.md)
 - Stability boundary: `core/`, `router/router.py`,
   `router/health_router.py`, `router/score_router.py`, and existing provider
@@ -53,6 +54,10 @@ CLI, API key, or login.
 git clone https://github.com/icacaca-afk/ai-hub.git
 cd ai-hub
 python -m pip install -e .
+
+# Optional: MCP adapter runtime (exposes ai-hub over stdio MCP)
+python -m pip install -e ".[mcp]"
+python -m adapters.marvis_mcp_server
 
 ai-hub status
 ai-hub caps

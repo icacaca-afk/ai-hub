@@ -39,20 +39,25 @@ def build_pipeline_inspection(pipeline) -> dict[str, Any]:
 
 
 def _build_default_pipeline():
-    """Construct the planning CLI's default pipeline without executing it."""
-    from cli.plan import _build_registry
+    """Construct the planning CLI's default execution shape — side-effect-free.
+
+    V1.0.13 审核：必须描述 `ai-hub plan` 实际运行的默认 Pipeline。
+    PlanExecutor 默认以 default_pipeline(router)（无 quota/hooks/store）
+    构造，因此这里同样不构造 QuotaManager / SQLiteExecutionStore 等
+    持久依赖——否则 has_quota 会失真为 true，且 introspection 会在
+    磁盘上创建 .ai-hub/*.db，违反 ADR-0034 的 side-effect-free 定位。
+    """
+    from cli.provider_registry import build_default_registry
     from core.health_registry import HealthRegistry
-    from core.quota import QuotaManager
     from planner.pipeline import default_pipeline
     from router.metrics_router import MetricsRouter
 
-    quota = QuotaManager()
     router = MetricsRouter(
-        _build_registry(),
-        quota_manager=quota,
+        build_default_registry(),
+        quota_manager=None,
         health_registry=HealthRegistry(),
     )
-    return default_pipeline(router, quota=quota)
+    return default_pipeline(router)
 
 
 def _print_human(payload: dict[str, Any]) -> None:
