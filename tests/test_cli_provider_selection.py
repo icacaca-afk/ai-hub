@@ -36,6 +36,21 @@ class TestExtractProviderOption:
     @pytest.mark.parametrize(
         "args",
         [
+            ["demo", "hello", "--provider", "demo"],
+            ["--provider=demo", "demo", "hello"],
+        ],
+    )
+    def test_task_word_equal_to_provider_name_is_preserved(self, args):
+        """Only the option occurrence is removed, never equal task text."""
+        from cli.provider_selection import extract_provider_option
+
+        remaining, provider = extract_provider_option(args)
+        assert remaining == ["demo", "hello"]
+        assert provider == "demo"
+
+    @pytest.mark.parametrize(
+        "args",
+        [
             ["hello", "--provider"],
             ["hello", "--provider", "--json"],
             ["hello", "--provider="],
@@ -85,6 +100,14 @@ class TestProviderPinnedCommands:
         assert "Provider:     Demo" in captured.out
         assert "You said: hello" in captured.out
         assert "--provider" not in captured.out
+
+    def test_ask_preserves_task_word_equal_to_selected_provider(self, capsys):
+        from cli.main import cmd_ask
+
+        cmd_ask(["demo", "hello", "--provider", "demo"])
+        captured = capsys.readouterr()
+        assert "Provider:     Demo" in captured.out
+        assert "You said: demo hello" in captured.out
 
     def test_plan_runs_demo_and_keeps_json_pure(self, monkeypatch, capsys):
         from cli import plan as plan_module
