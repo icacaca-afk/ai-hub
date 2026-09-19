@@ -219,7 +219,9 @@ class NineRouterProvider(Provider):
         quota_total=-1,
         health_type="api",
         cost_currency=None,
-        cost_amount=0.0,
+        # Upstream cost varies by 9Router target. ``None`` is intentional:
+        # zero would incorrectly claim the call is free.
+        cost_amount=None,
         cost_unit="upstream_managed",
         timeout=300,
     )
@@ -250,6 +252,11 @@ class NineRouterProvider(Provider):
             return HealthReport.unavailable(self.name, self.configuration_error)
         if not self.config.enabled:
             return HealthReport.unavailable(self.name, "9Router is disabled")
+        if not self._explicitly_selected:
+            return HealthReport.unavailable(
+                self.name,
+                "9Router is manual-only; use --provider nine_router",
+            )
         if not self.bridge.check_available():
             return HealthReport.unavailable(
                 self.name,
@@ -267,4 +274,16 @@ class NineRouterProvider(Provider):
         return self.config.enabled and self.config.authentication_allowed
 
     def quota_left(self) -> int:
+        # The frozen Provider contract uses -1 as the only non-exhausted
+        # sentinel when an exact upstream balance is unavailable. User-facing
+        # quota_info() below reports None so this is not presented as unlimited.
         return -1
+
+    def quota_info(self) -> dict[str, Any]:
+        return {
+            "type": "unknown",
+            "total": None,
+            "remaining": None,
+            "reset_at": None,
+            "auto_detect": False,
+        }

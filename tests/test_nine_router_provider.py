@@ -15,6 +15,7 @@ from core.registry import CapabilityRegistry
 from cli.provider_selection import narrow_registry
 from providers.nine_router.config import NineRouterConfig
 from providers.nine_router.provider import NineRouterBridge, NineRouterProvider
+from router.score_router import ScoreRouter
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -361,12 +362,68 @@ def test_reachable_model_health_is_degraded_not_healthy(monkeypatch):
         )
         monkeypatch.setenv("NINE_ROUTER_MODEL", "approved/model")
         monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
-        report = NineRouterProvider().health()
+        provider = NineRouterProvider()
+        provider.mark_explicit_selection()
+        report = provider.health()
 
     assert report.status == "degraded"
     assert report.authenticated is True
     assert report.quota_ok is None
     assert "execution not yet verified" in report.message
+
+
+def test_manual_only_health_is_unavailable_and_network_free_before_selection(
+    monkeypatch,
+):
+    with _server() as server:
+        monkeypatch.setenv("NINE_ROUTER_ENABLED", "1")
+        monkeypatch.setenv(
+            "NINE_ROUTER_BASE_URL",
+            f"http://127.0.0.1:{server.server_port}/v1",
+        )
+        monkeypatch.setenv("NINE_ROUTER_MODEL", "approved/model")
+        monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
+        report = NineRouterProvider().health()
+
+    assert report.status == "unavailable"
+    assert "--provider nine_router" in report.message
+    assert server.requests == []
+
+
+def test_score_router_cannot_bypass_manual_only_gate(monkeypatch):
+    with _server() as server:
+        monkeypatch.setenv("NINE_ROUTER_ENABLED", "1")
+        monkeypatch.setenv(
+            "NINE_ROUTER_BASE_URL",
+            f"http://127.0.0.1:{server.server_port}/v1",
+        )
+        monkeypatch.setenv("NINE_ROUTER_MODEL", "approved/model")
+        monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
+        registry = CapabilityRegistry()
+        registry.register(NineRouterProvider())
+
+        selected = ScoreRouter(registry).route(_task())
+
+    assert selected is None
+    assert server.requests == []
+
+
+def test_cost_and_quota_metadata_do_not_claim_free_or_unlimited(monkeypatch):
+    monkeypatch.delenv("NINE_ROUTER_ENABLED", raising=False)
+    provider = NineRouterProvider()
+
+    assert provider.cost() == {
+        "currency": None,
+        "amount": None,
+        "unit": "upstream_managed",
+    }
+    assert provider.quota_info() == {
+        "type": "unknown",
+        "total": None,
+        "remaining": None,
+        "reset_at": None,
+        "auto_detect": False,
+    }
 
 
 def test_disabled_health_does_not_touch_network(monkeypatch):
