@@ -85,3 +85,17 @@ def test_mcp_adapter_documented_for_installs():
         text = (ROOT / name).read_text(encoding="utf-8")
         assert '".[mcp]"' in text, name
         assert "python -m adapters.marvis_mcp_server" in text, name
+
+
+def test_nine_router_safe_configuration_is_documented_bilingually():
+    required = (
+        "NINE_ROUTER_ENABLED",
+        "NINE_ROUTER_MODEL",
+        "NINE_ROUTER_ALLOW_NO_AUTH",
+        "--provider nine_router",
+        "X-9Router-Token-Saver",
+    )
+    for name in ("README.md", "README.zh-CN.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        for marker in required:
+            assert marker in text, f"{name} missing {marker}"

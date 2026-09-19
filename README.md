@@ -15,12 +15,12 @@ Task → Capability → Provider → Bridge → Runtime → Result
 
 ## Project status
 
-- Current release line: **V1.0.13** (release candidate; the immutable Git tag
-  identifies the published release)
+- Current release: **V1.0.13** (the immutable Git tag and release wheel identify
+  the published release)
 - V1.0.12 Predicate API, described by [ADR-0033](docs/adr/0033-predicate-api.md)
 - V1.0.13 CLI pipeline introspection (`pipeline inspect`), described by
   [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
-- Candidate verification baseline: **1113 passed / 1 skipped** full non-live
+- Published verification baseline: **1113 passed / 1 skipped** full non-live
   regression, clean-wheel install checks (incl. `[mcp]` extra), CLI and MCP
   black-box smokes — see
   [the V1.0.13 release record](docs/releases/2026-08-23-v1.0.13-release-record.md)
@@ -74,6 +74,35 @@ MCP `list_providers` is metadata-only by default and therefore does not launch
 external CLIs or authentication checks. MCP callers that explicitly need a
 live status may pass `probe_availability=true`; that operation can take as long
 as the configured Provider probes.
+
+## Proposed V1.0.14: 9Router Provider
+
+9Router can be used as an optional downstream OpenAI-compatible gateway. AI Hub
+still selects the Provider and records execution; 9Router owns its configured
+model/Combo, account selection, and downstream fallback. The integration is
+disabled and ineligible for automatic routing by default.
+
+Configure a fixed model or Combo and select the Provider explicitly:
+
+```powershell
+$env:NINE_ROUTER_ENABLED = '1'
+$env:NINE_ROUTER_BASE_URL = 'http://127.0.0.1:20128/v1'
+$env:NINE_ROUTER_MODEL = 'approved-provider/model-or-combo'
+$env:NINE_ROUTER_API_KEY = 'dedicated-test-key'
+
+ai-hub ask 'Hello through the approved gateway' --provider nine_router
+```
+
+An unauthenticated endpoint is accepted only on loopback and only with the
+additional explicit setting `NINE_ROUTER_ALLOW_NO_AUTH=1`. Non-loopback
+endpoints require HTTPS and an API key. URL credentials, query strings,
+fragments, and redirects are rejected.
+
+The adapter sends `X-9Router-Token-Saver: off` by default; set
+`NINE_ROUTER_TOKEN_SAVER=1` only after a task-specific quality comparison.
+Cloud Sync/Tunnel, prompt-style injection, MITM credential reuse, tool calls,
+streaming, and automatic 9Router selection are not enabled by this integration.
+See [ADR-0038](docs/adr/0038-nine-router-provider.md) for the review boundary.
 
 Run the test suite without live-provider requirements:
 
