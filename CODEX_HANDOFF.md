@@ -23,10 +23,10 @@ pip install -e .  # or: pip install -e ".[dev]"
 python -m pytest tests/ -x -q
 ```
 
-**GitHub token** (for API access — **do NOT commit tokens to the repo**; GitHub Push Protection blocks it):
-- Retrieve from Windows Credential Manager: `git credential fill` (host=github.com) — the `password` field is the token
-- Or set env var: `$env:GH_TOKEN = "<token>"` / `export GH_TOKEN=...`
-- Auth header: `Authorization: token $env:GH_TOKEN`
+**GitHub authentication** (do not commit tokens to the repository):
+- Prefer `gh auth status` / `gh auth login` and the operating-system credential manager.
+- If an environment variable is required, set it only for the current process and do not print it.
+- Never put a token in this handoff, a command transcript, or a review artifact.
 - Base URL: `https://api.github.com`
 
 **Pytest tips**:
@@ -144,17 +144,24 @@ Key decision to make in the ADR: whether to join `pipeline.describe()` with `des
 
 ### Task D — Update outdated documentation
 
+**Progress (Codex, 2026-08-13)**: Maintained reader documentation now uses a
+bilingual convention: the unsuffixed filename is English and `.zh-CN.md` is
+Simplified Chinese. README, Architecture, Roadmap, Product, Glossary, Provider
+Specification, Contributing, and the documentation index have complete pairs
+with reciprocal language links. ADRs, reviews, historical handoffs, and release
+artifacts remain in their original language as immutable records.
+
 Several docs are badly outdated and should be refreshed:
 
 | File | Current status | Action |
 |------|---------------|--------|
-| `README.md` | Stuck at V0.5.0-alpha | Update to reflect V1.0.11 |
-| `docs/ROADMAP.md` | Stuck at V0.5 | Update |
+| `README.md` / `README.zh-CN.md` | Updated to V1.0.11 | ✅ Complete |
+| `docs/ROADMAP.md` / `docs/ROADMAP.zh-CN.md` | Updated through V1.0.13 planned sequence | ✅ Complete |
 | `HANDOFF_TO_TRAE.md` | Stuck at V0.8.2 | Replace with this document or update |
 | `docs/adr/0033-predicate-api.md` | Written but not committed | Commit as part of Task B |
 | `docs/adr/0035-digital-asset-sop-position.md` | Unknown, not committed | Investigate and handle |
 | `docs/AI-Agent-Digital-Asset-SOP-v1.0.md` | Not committed | Investigate |
-| `docs/ARCHITECTURE.md` | Modified (not committed) | Review changes |
+| `docs/ARCHITECTURE.md` / `docs/ARCHITECTURE.zh-CN.md` | Refreshed; Governance Layer preserved | ✅ Complete, uncommitted |
 
 Do **not** modify the frozen core/router/providers files even if docs reference outdated APIs there.
 

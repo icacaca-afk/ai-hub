@@ -23,59 +23,45 @@ from core.history import HistoryStore
 from core.health_registry import HealthRegistry
 from router.score_router import ScoreRouter
 from cli.explain_route import cmd_explain_route
-from cli.plan import cmd_plan
 from cli.inspect import cmd_inspect
 from cli.trace import cmd_trace
 from cli.history import cmd_exec_history
+from cli.pipeline_inspect import cmd_pipeline
+from cli.provider_selection import extract_provider_option, narrow_registry
 from cli.stats import cmd_stats
 
 
 def _build_registry() -> CapabilityRegistry:
     """构建 CapabilityRegistry。
 
-    V0.1.1: 全量注册 5 个 Provider，验证 Zero-Modification KPI。
-    - demo       (FakeBridge)  — 基线
-    - gemini_cli (CLIBridge)   — V0.1 真实接入
-    - stub       (CLIBridge)   — V0.1.1 架构验证（同类型第二个）
-    - openai_api (APIBridge)   — V0.1 真实接入
-    - qoder      (CLIBridge)   — 注册但 CLI 不可用时自动降级
+    V1.0.13 审核：委托给 cli.provider_registry.build_default_registry，
+    与 plan / pipeline introspection 共用单一注册来源，防止各入口漂移。
     """
-    registry = CapabilityRegistry()
+    from cli.provider_registry import build_default_registry
 
-    from providers.demo.provider import DemoProvider
-    registry.register(DemoProvider())
-
-    from providers.gemini.provider import GeminiCLIProvider
-    registry.register(GeminiCLIProvider())
-
-    from providers.stub.provider import StubProvider
-    registry.register(StubProvider())
-
-    from providers.openai_api.provider import OpenAIAPIProvider
-    registry.register(OpenAIAPIProvider())
-
-    from providers.qoder.provider import QoderProvider
-    registry.register(QoderProvider())
-
-    from providers.claude_cli.provider import ClaudeCLIProvider
-    registry.register(ClaudeCLIProvider())
-
-    from providers.fake_browser.provider import FakeBrowserProvider
-    registry.register(FakeBrowserProvider())
-
-    from providers.web_ai.provider import WebAIProvider
-    registry.register(WebAIProvider())
-
-    return registry
+    return build_default_registry()
 
 
 def cmd_ask(args: list[str]) -> None:
-    if not args:
-        print('Usage: ai-hub ask "<task description>"')
+    usage = 'Usage: ai-hub ask "<task description>" [--provider NAME]'
+    try:
+        task_args, provider_name = extract_provider_option(args)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
         sys.exit(1)
 
-    text = " ".join(args)
-    registry = _build_registry()
+    if not task_args:
+        print(usage)
+        sys.exit(1)
+
+    text = " ".join(task_args)
+    try:
+        registry = narrow_registry(_build_registry(), provider_name)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
+        sys.exit(1)
     from core.quota import QuotaManager
     quota = QuotaManager()
     hr = HealthRegistry()
@@ -685,15 +671,29 @@ def cmd_benchmark(args: list[str]) -> None:
     print("Benchmark complete.")
 
 
+def _cmd_plan(args: list[str]) -> None:
+    """惰性分发 plan 命令。
+
+    cli.plan 在导入时会初始化 SQLiteExecutionStore 等持久单例；
+    只有用到 plan/inspect/trace/history 族命令时才允许付出该代价，
+    保证 `ai-hub pipeline inspect`、`ask` 等路径零磁盘副作用
+    （V1.0.13 审核 P1：introspection 必须无持久化副作用）。
+    """
+    from cli.plan import cmd_plan
+
+    cmd_plan(args)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("AI Hub — One Task. Any AI. Any Runtime.\n")
         print("Usage:")
-        print('  ai-hub ask "<task>"    Execute a task (single step)')
-        print('  ai-hub plan "<task>"   Decompose + execute multi-step task (V0.9.1)')
+        print('  ai-hub ask "<task>" [--provider NAME]  Execute a task (single step)')
+        print('  ai-hub plan "<task>" [--provider NAME]  Decompose + execute multi-step task')
         print('  ai-hub plan "<task>" --json  Plan result as structured JSON (V0.9.3)')
         print('  ai-hub inspect <plan_id>     Inspect stored plan (V0.9.3)')
         print('  ai-hub inspect --list        List recent plans (V0.9.3)')
+        print('  ai-hub pipeline inspect [--json]  Inspect the default runtime pipeline')
         print('  ai-hub trace <plan_id>       Trace plan execution timeline (V0.9.4)')
         print('  ai-hub trace --list          List traced plans (V0.9.4)')
         print('  ai-hub exec-history          List recent plan executions (V0.9.5 SQLite)')
@@ -716,7 +716,8 @@ def main() -> None:
 
     commands = {
         "ask": cmd_ask,
-        "plan": cmd_plan,
+        "plan": _cmd_plan,
+        "pipeline": cmd_pipeline,
         "inspect": cmd_inspect,
         "trace": cmd_trace,
         "exec-history": cmd_exec_history,

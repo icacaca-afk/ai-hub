@@ -1,0 +1,152 @@
+# AI Hub
+
+> 一个任务，任意 AI，任意运行时。
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+AI Hub 是一个本地优先的 AI Runtime：它按能力路由任务，选择可用的
+Provider，通过 Bridge 调用外部运行时，并返回统一结果。它统一的是 CLI、HTTP
+API、浏览器和测试 Provider 的执行方式，而不是强行抹平不同模型的差异。
+
+```text
+Task → Capability → Provider → Bridge → Runtime → Result
+```
+
+## 项目状态
+
+- 当前发布线：**V1.0.13**（发布候选；正式发布以不可变 Git tag 标识）
+- V1.0.12 Predicate API，见 [ADR-0033](docs/adr/0033-predicate-api.md)
+- V1.0.13 CLI Pipeline Introspection（`pipeline inspect`），见
+  [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
+- 候选验证基线：完整 non-live 回归 **1113 通过 / 1 跳过**、干净 Wheel 安装
+  验证（含 `[mcp]` extra）、CLI 与 MCP 黑盒 smoke —— 见
+  [V1.0.13 发布记录](docs/releases/2026-08-23-v1.0.13-release-record.md)
+- 冻结边界：`core/`、`router/router.py`、`router/health_router.py`、
+  `router/score_router.py` 和现有 Provider 实现，除 Bug Fix 外不修改
+
+发布包元数据与 Runtime 检查现在共同以 `cli/version.py` 为版本事实来源。干净
+Wheel 验证必须确认二者都报告 `1.0.13`；已经发布的版本仍以 Git tag 标识。
+
+## 主要能力
+
+- 基于 Capability 的 Provider 路由，综合健康、优先级、延迟和额度信号
+- CLI、API、浏览器、MCP 与测试 Runtime 共用的 Provider/Bridge 边界
+- 规则式与 LLM 辅助的多步任务规划
+- 支持 Retry、Checkpoint、Condition 和 Hook 的 Execution Pipeline
+- ExecutionEvent、内存 Trace、SQLite 历史记录与统计投影
+- 元数据注册表和确定性序列化
+- 通过 `ExecutionPipeline.describe()`、`to_dict()`、`to_json()` 无副作用查看
+  Pipeline 结构
+
+## 快速开始
+
+需要 Python 3.11 或更高版本。具体 Provider 可能还需要安装对应 CLI、配置 API
+Key 或完成登录。
+
+```bash
+git clone https://github.com/icacaca-afk/ai-hub.git
+cd ai-hub
+python -m pip install -e .
+
+# 可选：MCP 适配器运行时（通过 stdio MCP 暴露 ai-hub 能力）
+python -m pip install -e ".[mcp]"
+python -m adapters.marvis_mcp_server
+
+ai-hub status
+ai-hub caps
+ai-hub ask "你好" --provider demo
+ai-hub plan "先问候然后总结" --provider demo --json
+ai-hub pipeline inspect --json
+```
+
+上面的显式 Demo Provider 路径不需要 API Key 或外部 CLI，结果可重复。省略
+`--provider demo` 时，继续使用正常的 Capability 与 Health 路由。
+
+MCP `list_providers` 默认只返回元数据，不启动外部 CLI 或认证检查。确实需要实时
+状态的 MCP 调用方可以显式传入 `probe_availability=true`；该操作可能持续到各
+Provider 探测超时。
+
+运行不依赖在线 Provider 的测试基线：
+
+```bash
+python -m pytest tests/ -x -q \
+  --deselect "tests/test_benchmark.py" \
+  --deselect "tests/test_cli_plan_json.py"
+```
+
+部分测试会调用已安装的外部 Runtime；需要完全隔离时，请结合仓库 pytest marker
+和测试文档筛选。
+
+## 主要命令
+
+| 命令 | 用途 |
+|---|---|
+| `ai-hub ask "<任务>" [--provider NAME]` | 路由或固定 Provider 后执行单步任务 |
+| `ai-hub plan "<任务>" [--provider NAME]` | 拆解并执行多步任务 |
+| `ai-hub explain-route "<任务>"` | 解释 Provider 选择结果 |
+| `ai-hub status` / `doctor` | 查看和诊断 Provider |
+| `ai-hub benchmark` | 测量健康 Provider 的延迟和成功率 |
+| `ai-hub inspect` / `trace` | 查看 Plan 和执行时间线 |
+| `ai-hub pipeline inspect [--json]` | 无执行副作用地查看默认 Runtime Pipeline |
+| `ai-hub exec-history` / `stats` | 查询持久化执行历史 |
+| `ai-hub quota` / `caps` | 查看额度和 Capability |
+| `ai-hub session` | 管理 Runtime Session |
+
+## 干净 Wheel 发布检查
+
+editable install 成功不能单独作为发布证据。必须构建 Wheel，在全新虚拟环境中安装，
+切换到源码目录以外，再执行“快速开始”中的三条 Demo 命令。该流程会验证
+`planner.metrics`、`planner.stages`、`providers.claude_cli` 等嵌套包确实进入
+发布产物。安装后的 Wheel 文件名必须对应 `1.0.13`，且
+`importlib.metadata.version("ai-hub")` 必须与
+`ai-hub pipeline inspect --json` 返回的 Runtime 版本一致。
+
+## 架构
+
+```text
+CLI / MCP Client
+        │
+        ▼
+Task ──► Planner / Router
+        │
+        ▼
+ExecutionPipeline
+  pre-stages → Provider Bridge → post-stages
+        │
+        ├──► ExecutionEvent → Trace / SQLite / Statistics
+        └──► Result
+```
+
+核心架构约束：Provider 声明能力并选择 Bridge；Bridge 负责与外部 Runtime 通信。
+Workflow 关注点进入 `planner/` 和 Execution Pipeline，而不是冻结的 Router 或
+Provider 契约。
+
+组件边界、运行时数据流和文档地图见[架构总览](docs/ARCHITECTURE.zh-CN.md)。
+
+## 新增 Provider
+
+新 Provider 放在 `providers/<name>/`，实现既有 Provider 契约：声明
+`ProviderMetadata`、选择 Bridge，并提供健康、认证和额度状态。不得为了识别某个
+Provider 而修改基础 Router。
+
+提交前请阅读 [Provider 规范](docs/PROVIDER_SPEC.zh-CN.md)和
+[贡献指南](CONTRIBUTING.zh-CN.md)。现有 Provider 实现属于冻结边界；真正的新
+Provider 可以在自己的目录中新增。
+
+## 文档
+
+持续维护、面向读者的说明文档提供英文和简体中文两个版本。无语言后缀的文件是
+英文，`.zh-CN.md` 是中文。ADR、外部审核、历史交接和特定版本产物是不可变档案，
+保留其原始语言，不做机械翻译。
+
+- [Documentation index](docs/README.md) · [中文文档索引](docs/README.zh-CN.md)
+- [Roadmap](docs/ROADMAP.md) · [路线图](docs/ROADMAP.zh-CN.md)
+- [Product](docs/PRODUCT.md) · [产品说明](docs/PRODUCT.zh-CN.md)
+- [Glossary](docs/GLOSSARY.md) · [术语表](docs/GLOSSARY.zh-CN.md)
+- [Provider Specification](docs/PROVIDER_SPEC.md) ·
+  [Provider 规范](docs/PROVIDER_SPEC.zh-CN.md)
+- [Contributing](CONTRIBUTING.md) · [贡献指南](CONTRIBUTING.zh-CN.md)
+
+## 许可证
+
+[MIT](LICENSE)

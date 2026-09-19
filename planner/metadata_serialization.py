@@ -32,6 +32,7 @@ from planner.runtime_metadata import RuntimeMetadata
 from planner.stage_registry import StageInfo
 from planner.stages.condition_stage import ConditionEval
 from planner.pipeline_descriptor import PipelineDescriptor
+from planner.predicate_descriptor import PredicateDescriptor
 
 
 # ─────────────────────────────────────────────────────────────
@@ -166,6 +167,18 @@ def serialize_condition_eval(ce: ConditionEval) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────
+# PredicateDescriptor → dict (canonical, V1.0.12 ADR-0033)
+# ─────────────────────────────────────────────────────────────
+def serialize_predicate(pd: PredicateDescriptor) -> Dict[str, Any]:
+    """Serialize explicit predicate semantics without inspecting a callable."""
+    return {
+        "name": pd.name,
+        "description": pd.description,
+        "subject": pd.subject,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 # PipelineDescriptor → dict (canonical, V1.0.11 ADR-0032)
 # ─────────────────────────────────────────────────────────────
 def serialize_pipeline(pd: PipelineDescriptor) -> Dict[str, Any]:
@@ -269,6 +282,7 @@ __all__ = [
     "serialize_stage_info",
     "serialize_runtime_metadata",
     "serialize_condition_eval",
+    "serialize_predicate",
     "serialize_pipeline",
     "to_json",
 ]

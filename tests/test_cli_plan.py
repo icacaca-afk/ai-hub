@@ -25,6 +25,25 @@ from core.result import Result
 from core.task import Task
 
 
+def test_runtime_state_cleanup_detaches_and_closes_sqlite_store(monkeypatch):
+    from cli import plan as plan_module
+
+    calls = []
+
+    class FakeStore:
+        def detach(self):
+            calls.append("detach")
+
+        def close(self):
+            calls.append("close")
+
+    monkeypatch.setattr(plan_module, "_SQLITE_STORE", FakeStore())
+
+    plan_module._close_runtime_state()
+
+    assert calls == ["detach", "close"]
+
+
 def _run_cli(*args, timeout=30):
     """运行 ai-hub CLI 命令（subprocess）。"""
     cmd = [sys.executable, "-m", "cli.main"] + list(args)
@@ -330,3 +349,22 @@ class TestCliPlanMetadataContract:
         # Status 行格式：(success/total)
         assert "(" in captured.out and ")" in captured.out
         assert "/" in captured.out
+
+
+class TestPlanRegistryParity:
+    """V1.0.13 审核 P1：plan 注册表必须与 ask 完全一致（单一来源）。"""
+
+    def test_plan_and_ask_registries_have_identical_providers(self):
+        from cli.main import _build_registry as ask_registry
+        from cli.plan import _build_registry as plan_registry
+
+        ask_names = [p.name for p in ask_registry().all()]
+        plan_names = [p.name for p in plan_registry().all()]
+        assert plan_names == ask_names
+
+    def test_plan_supports_claude_cli_provider(self):
+        from cli.plan import _build_registry
+        from cli.provider_selection import narrow_registry
+
+        narrowed = narrow_registry(_build_registry(), "claude_cli")
+        assert [p.name for p in narrowed.all()] == ["claude_cli"]

@@ -34,6 +34,7 @@ from planner.stages.condition_stage import (
     Condition,
     VALID_ACTIONS,
 )
+from planner.predicate_descriptor import PredicateDescriptor
 
 __all__ = [
     # V1.0.2: RetryStage
@@ -49,4 +50,6 @@ __all__ = [
     "ConditionEval",
     "Condition",
     "VALID_ACTIONS",
+    # V1.0.12: explicit predicate semantics
+    "PredicateDescriptor",
 ]

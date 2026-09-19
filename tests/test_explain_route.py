@@ -10,25 +10,50 @@
 import subprocess
 import sys
 import os
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+
+from core.registry import CapabilityRegistry
+from providers.demo.provider import DemoProvider
 
 # 项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class _NeverExhaustedQuota:
+    def exhausted(self, _provider_name):
+        return False
+
+
 def _run_explain_route(task_text: str, extra_args: list[str] = None) -> tuple[int, str, str]:
-    """运行 explain-route 命令，返回 (exit_code, stdout, stderr)。"""
-    cmd = [sys.executable, "-m", "cli.main", "explain-route"] + task_text.split() + (extra_args or [])
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=PROJECT_ROOT,
-        env={**os.environ, "PYTHONPATH": PROJECT_ROOT},
-        timeout=60,
-    )
-    return result.returncode, result.stdout or "", result.stderr or ""
+    """Run route explanation against a deterministic non-live registry."""
+    import cli.explain_route as explain_route_module
+
+    def build_registry():
+        registry = CapabilityRegistry()
+        registry.register(DemoProvider())
+        return registry
+
+    old_registry_builder = explain_route_module._build_registry
+    old_quota_manager = explain_route_module.QuotaManager
+    stdout = StringIO()
+    stderr = StringIO()
+    code = 0
+    try:
+        explain_route_module._build_registry = build_registry
+        explain_route_module.QuotaManager = lambda: _NeverExhaustedQuota()
+        args = task_text.split() + (extra_args or [])
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            try:
+                explain_route_module.cmd_explain_route(args)
+            except SystemExit as exc:
+                code = int(exc.code or 0)
+    finally:
+        explain_route_module._build_registry = old_registry_builder
+        explain_route_module.QuotaManager = old_quota_manager
+
+    return code, stdout.getvalue(), stderr.getvalue()
 
 
 class TestExplainRouteOutput:

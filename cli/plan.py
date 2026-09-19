@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import sys
 
@@ -40,6 +41,7 @@ from planner.rule_based_planner import RuleBasedPlanner
 from planner.llm_planner import LLMPlanner
 from planner.trace_collector import InMemoryTraceCollector
 from planner.sqlite_execution_store import SQLiteExecutionStore
+from cli.provider_selection import extract_provider_option, narrow_registry
 
 
 # V0.9.3: 进程内 PlanStore（环形缓冲 N=10），供 cmd_inspect 查询
@@ -62,6 +64,15 @@ _SQLITE_STORE = SQLiteExecutionStore()
 _SQLITE_STORE.attach(_EVENT_BUS)
 
 
+def _close_runtime_state() -> None:
+    """Release process-owned persistence resources during interpreter exit."""
+    _SQLITE_STORE.detach()
+    _SQLITE_STORE.close()
+
+
+atexit.register(_close_runtime_state)
+
+
 def get_plan_store() -> PlanStore:
     """暴露 PlanStore 给 cli/inspect.py 使用（V0.9.3）。"""
     return _PLAN_STORE
@@ -82,32 +93,15 @@ _history_module.set_execution_store(_SQLITE_STORE)
 
 
 def _build_registry():
-    """构建 CapabilityRegistry（与 cli/main.py 一致）。"""
-    from core.registry import CapabilityRegistry
-    registry = CapabilityRegistry()
+    """构建 CapabilityRegistry。
 
-    from providers.demo.provider import DemoProvider
-    registry.register(DemoProvider())
+    V1.0.13 审核：委托给 cli.provider_registry.build_default_registry，
+    与 `ai-hub ask` 保持同一注册来源（此前缺 claude_cli 导致
+    `plan --provider claude_cli` 报 Unknown provider）。
+    """
+    from cli.provider_registry import build_default_registry
 
-    from providers.gemini.provider import GeminiCLIProvider
-    registry.register(GeminiCLIProvider())
-
-    from providers.stub.provider import StubProvider
-    registry.register(StubProvider())
-
-    from providers.openai_api.provider import OpenAIAPIProvider
-    registry.register(OpenAIAPIProvider())
-
-    from providers.qoder.provider import QoderProvider
-    registry.register(QoderProvider())
-
-    from providers.fake_browser.provider import FakeBrowserProvider
-    registry.register(FakeBrowserProvider())
-
-    from providers.web_ai.provider import WebAIProvider
-    registry.register(WebAIProvider())
-
-    return registry
+    return build_default_registry()
 
 
 def cmd_plan(args: list[str]) -> None:
@@ -118,15 +112,26 @@ def cmd_plan(args: list[str]) -> None:
       ai-hub plan "<task>" --llm    使用 LLMPlanner 语义分解（V0.9.2）
       ai-hub plan "<task>" --json   结构化 JSON 输出（V0.9.3）
     """
-    if not args:
-        print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
+    usage = (
+        'Usage: ai-hub plan "<composite task description>" '
+        '[--llm] [--json] [--provider NAME]'
+    )
+    try:
+        parsed_args, provider_name = extract_provider_option(args)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
         sys.exit(1)
 
-    json_output = "--json" in args
-    use_llm = "--llm" in args
-    task_args = [a for a in args if a not in ("--json", "--llm")]
+    if not parsed_args:
+        print(usage)
+        sys.exit(1)
+
+    json_output = "--json" in parsed_args
+    use_llm = "--llm" in parsed_args
+    task_args = [a for a in parsed_args if a not in ("--json", "--llm")]
     if not task_args:
-        print('Usage: ai-hub plan "<composite task description>" [--llm] [--json]')
+        print(usage)
         sys.exit(1)
 
     text = " ".join(task_args)
@@ -135,7 +140,12 @@ def cmd_plan(args: list[str]) -> None:
         sys.exit(1)
 
     # 构建 Runtime（与 cmd_ask 一致）
-    registry = _build_registry()
+    try:
+        registry = narrow_registry(_build_registry(), provider_name)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        print(usage)
+        sys.exit(1)
     quota = QuotaManager()
     hr = HealthRegistry()
     router = MetricsRouter(registry, quota_manager=quota, health_registry=hr)

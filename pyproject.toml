@@ -1,10 +1,21 @@
 [project]
 name = "ai-hub"
-version = "0.0.1"
+dynamic = ["version"]
 description = "One command. Multiple AI providers. Free-first routing."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8,<9",
+    "mcp>=1,<2",
+]
+# MCP adapter runtime (adapters/marvis_mcp_server.py)：
+# pip install "ai-hub[mcp]" 后方可 `python -m adapters.marvis_mcp_server`
+mcp = [
+    "mcp>=1,<2",
+]
 
 [project.scripts]
 ai-hub = "cli.main:main"
@@ -19,20 +30,16 @@ markers = [
     "live: marks tests as requiring live providers (deselect with '-m \"not live\"')",
 ]
 
-[tool.setuptools]
-packages = [
-    "core",
-    "router",
-    "cli",
-    "planner",
-    "providers",
-    "providers.demo",
-    "providers.gemini",
-    "providers.qoder",
-    "providers.openai_api",
-    "providers.openai_compatible",
-    "providers.fake_browser",
-    "providers.web_ai",
-    "adapters",
-    "scripts",
+[tool.setuptools.packages.find]
+include = [
+    "core*",
+    "router*",
+    "cli*",
+    "planner*",
+    "providers*",
+    "adapters*",
+    "scripts*",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "cli.version.__version__" }
