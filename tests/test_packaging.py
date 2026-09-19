@@ -10,6 +10,7 @@ REQUIRED_NESTED_PACKAGES = {
     "planner.metrics",
     "planner.stages",
     "providers.claude_cli",
+    "providers.nine_router",
 }
 
 

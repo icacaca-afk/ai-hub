@@ -207,28 +207,7 @@ def _format_health(status: str) -> str:
 
 
 def _build_registry() -> CapabilityRegistry:
-    """构建 CapabilityRegistry（与 cli/main.py 一致）。"""
-    registry = CapabilityRegistry()
+    """Build the same canonical registry used by ask, plan, and MCP."""
+    from cli.provider_registry import build_default_registry
 
-    from providers.demo.provider import DemoProvider
-    registry.register(DemoProvider())
-
-    from providers.gemini.provider import GeminiCLIProvider
-    registry.register(GeminiCLIProvider())
-
-    from providers.stub.provider import StubProvider
-    registry.register(StubProvider())
-
-    from providers.openai_api.provider import OpenAIAPIProvider
-    registry.register(OpenAIAPIProvider())
-
-    from providers.qoder.provider import QoderProvider
-    registry.register(QoderProvider())
-
-    from providers.fake_browser.provider import FakeBrowserProvider
-    registry.register(FakeBrowserProvider())
-
-    from providers.web_ai.provider import WebAIProvider
-    registry.register(WebAIProvider())
-
-    return registry
+    return build_default_registry()

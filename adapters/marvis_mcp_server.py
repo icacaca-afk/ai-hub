@@ -67,37 +67,18 @@ _router: Router | None = None
 
 
 def _get_registry() -> CapabilityRegistry:
-    """延迟初始化 CapabilityRegistry（复用 cli/main.py 的注册模式）。"""
+    """延迟初始化所有入口共用的 canonical Provider registry。"""
     global _registry
     if _registry is not None:
         return _registry
 
-    _registry = CapabilityRegistry()
+    from cli.provider_registry import build_default_registry
 
-    # 按 cli/main.py._build_registry() 的顺序注册所有 Provider
-    # 每个 Provider 自带 Bridge 和 capability 声明
-    _provider_entries = [
-        ("providers.demo.provider", "DemoProvider"),
-        ("providers.gemini.provider", "GeminiCLIProvider"),
-        ("providers.stub.provider", "StubProvider"),
-        ("providers.openai_api.provider", "OpenAIAPIProvider"),
-        ("providers.qoder.provider", "QoderProvider"),
-        ("providers.fake_browser.provider", "FakeBrowserProvider"),
-    ]
-
-    registered_count = 0
-    for module_path, class_name in _provider_entries:
-        try:
-            mod = __import__(module_path, fromlist=[class_name])
-            cls = getattr(mod, class_name)
-            instance = cls()
-            _registry.register(instance)
-            registered_count += 1
-            logger.debug(f"Registered provider: {instance.name}")
-        except Exception as e:
-            logger.warning(f"Skipping provider {class_name}: {e}")
-
-    logger.info(f"CapabilityRegistry initialized with {registered_count} providers")
+    _registry = build_default_registry()
+    logger.info(
+        "CapabilityRegistry initialized with %d providers",
+        len(_registry.all()),
+    )
     return _registry
 
 
