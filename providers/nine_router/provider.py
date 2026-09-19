@@ -199,6 +199,8 @@ class NineRouterBridge(Bridge):
 class NineRouterProvider(Provider):
     """AI Hub declaration for the externally managed 9Router gateway."""
 
+    manual_only = True
+
     metadata = ProviderMetadata(
         name="nine_router",
         display_name="9Router",
@@ -225,6 +227,7 @@ class NineRouterProvider(Provider):
     bridge = NineRouterBridge(NineRouterConfig.disabled())
 
     def __init__(self):
+        self._explicitly_selected = False
         self.configuration_error: str | None = None
         try:
             config = NineRouterConfig.from_env()
@@ -233,6 +236,14 @@ class NineRouterProvider(Provider):
             config = NineRouterConfig.disabled()
         self.config = config
         self.bridge = NineRouterBridge(config)
+
+    def mark_explicit_selection(self) -> None:
+        self._explicitly_selected = True
+
+    def available(self) -> bool:
+        if not self._explicitly_selected:
+            return False
+        return super().available()
 
     def health(self) -> HealthReport:
         if self.configuration_error:

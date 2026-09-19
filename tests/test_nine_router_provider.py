@@ -11,8 +11,10 @@ import threading
 import pytest
 
 from core.task import Task
+from core.registry import CapabilityRegistry
+from cli.provider_selection import narrow_registry
 from providers.nine_router.config import NineRouterConfig
-from providers.nine_router.provider import NineRouterBridge
+from providers.nine_router.provider import NineRouterBridge, NineRouterProvider
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -311,3 +313,100 @@ def test_timeout_is_a_structured_failure(monkeypatch):
 
     assert result.success is False
     assert "timeout" in result.error.lower() or "timed out" in result.error.lower()
+
+
+def test_enabled_provider_is_not_available_before_explicit_selection(monkeypatch):
+    with _server() as server:
+        monkeypatch.setenv("NINE_ROUTER_ENABLED", "1")
+        monkeypatch.setenv(
+            "NINE_ROUTER_BASE_URL",
+            f"http://127.0.0.1:{server.server_port}/v1",
+        )
+        monkeypatch.setenv("NINE_ROUTER_MODEL", "approved/model")
+        monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
+        provider = NineRouterProvider()
+
+        assert provider.available() is False
+
+    assert server.requests == []
+
+
+def test_explicit_selection_allows_available_check(monkeypatch):
+    with _server() as server:
+        monkeypatch.setenv("NINE_ROUTER_ENABLED", "1")
+        monkeypatch.setenv(
+            "NINE_ROUTER_BASE_URL",
+            f"http://127.0.0.1:{server.server_port}/v1",
+        )
+        monkeypatch.setenv("NINE_ROUTER_MODEL", "approved/model")
+        monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
+        provider = NineRouterProvider()
+        registry = CapabilityRegistry()
+        registry.register(provider)
+
+        selected = narrow_registry(registry, "nine_router")
+
+        assert selected.all() == [provider]
+        assert provider.available() is True
+
+    assert [request["path"] for request in server.requests] == ["/v1/models"]
+
+
+def test_reachable_model_health_is_degraded_not_healthy(monkeypatch):
+    with _server() as server:
+        monkeypatch.setenv("NINE_ROUTER_ENABLED", "1")
+        monkeypatch.setenv(
+            "NINE_ROUTER_BASE_URL",
+            f"http://127.0.0.1:{server.server_port}/v1",
+        )
+        monkeypatch.setenv("NINE_ROUTER_MODEL", "approved/model")
+        monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
+        report = NineRouterProvider().health()
+
+    assert report.status == "degraded"
+    assert report.authenticated is True
+    assert report.quota_ok is None
+    assert "execution not yet verified" in report.message
+
+
+def test_disabled_health_does_not_touch_network(monkeypatch):
+    for key in (
+        "NINE_ROUTER_ENABLED",
+        "NINE_ROUTER_BASE_URL",
+        "NINE_ROUTER_MODEL",
+        "NINE_ROUTER_API_KEY",
+        "NINE_ROUTER_ALLOW_NO_AUTH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    provider = NineRouterProvider()
+    monkeypatch.setattr(
+        provider.bridge,
+        "_open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("disabled health must not open network")
+        ),
+    )
+
+    report = provider.health()
+
+    assert report.status == "unavailable"
+    assert "disabled" in report.message.lower()
+
+
+def test_invalid_enabled_configuration_health_does_not_touch_network(monkeypatch):
+    monkeypatch.setenv("NINE_ROUTER_ENABLED", "1")
+    monkeypatch.delenv("NINE_ROUTER_MODEL", raising=False)
+    monkeypatch.setenv("NINE_ROUTER_API_KEY", "dedicated-secret")
+    provider = NineRouterProvider()
+    monkeypatch.setattr(
+        provider.bridge,
+        "_open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid configuration must not open network")
+        ),
+    )
+
+    report = provider.health()
+
+    assert report.status == "unavailable"
+    assert "NINE_ROUTER_MODEL" in report.message
