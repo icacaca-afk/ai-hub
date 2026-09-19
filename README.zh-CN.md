@@ -14,11 +14,11 @@ Task → Capability → Provider → Bridge → Runtime → Result
 
 ## 项目状态
 
-- 当前发布线：**V1.0.13**（发布候选；正式发布以不可变 Git tag 标识）
+- 当前正式版本：**V1.0.13**（以不可变 Git tag 与 Release Wheel 标识）
 - V1.0.12 Predicate API，见 [ADR-0033](docs/adr/0033-predicate-api.md)
 - V1.0.13 CLI Pipeline Introspection（`pipeline inspect`），见
   [ADR-0034](docs/adr/0034-cli-pipeline-introspection.md)
-- 候选验证基线：完整 non-live 回归 **1113 通过 / 1 跳过**、干净 Wheel 安装
+- 正式发布验证基线：完整 non-live 回归 **1113 通过 / 1 跳过**、干净 Wheel 安装
   验证（含 `[mcp]` extra）、CLI 与 MCP 黑盒 smoke —— 见
   [V1.0.13 发布记录](docs/releases/2026-08-23-v1.0.13-release-record.md)
 - 冻结边界：`core/`、`router/router.py`、`router/health_router.py`、
@@ -65,6 +65,32 @@ ai-hub pipeline inspect --json
 MCP `list_providers` 默认只返回元数据，不启动外部 CLI 或认证检查。确实需要实时
 状态的 MCP 调用方可以显式传入 `probe_availability=true`；该操作可能持续到各
 Provider 探测超时。
+
+## V1.0.14 提案：9Router Provider
+
+9Router 可作为可选的下游 OpenAI 兼容网关。AI Hub 仍负责选择 Provider、统一
+执行入口和历史记录；9Router 只负责已配置的模型/Combo、账户选择和下游
+fallback。该集成默认关闭，也不会自动参与路由。
+
+必须固定模型或 Combo，并显式选择 Provider：
+
+```powershell
+$env:NINE_ROUTER_ENABLED = '1'
+$env:NINE_ROUTER_BASE_URL = 'http://127.0.0.1:20128/v1'
+$env:NINE_ROUTER_MODEL = 'approved-provider/model-or-combo'
+$env:NINE_ROUTER_API_KEY = 'dedicated-test-key'
+
+ai-hub ask '通过已批准的网关问候' --provider nine_router
+```
+
+无认证模式只允许用于 loopback 地址，并且必须额外显式设置
+`NINE_ROUTER_ALLOW_NO_AUTH=1`。非 loopback 地址必须使用 HTTPS 和 API Key；URL
+中的用户名密码、query、fragment 以及 HTTP 重定向都会被拒绝。
+
+适配器默认发送 `X-9Router-Token-Saver: off`；只有完成具体任务质量对比后，才应
+设置 `NINE_ROUTER_TOKEN_SAVER=1`。本集成不启用 Cloud Sync/Tunnel、提示风格
+注入、MITM 凭据复用、工具调用、流式输出或 9Router 自动路由。审核边界见
+[ADR-0038](docs/adr/0038-nine-router-provider.md)。
 
 运行不依赖在线 Provider 的测试基线：
 

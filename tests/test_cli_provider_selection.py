@@ -90,6 +90,25 @@ class TestNarrowRegistry:
         with pytest.raises(ValueError, match="demo"):
             narrow_registry(registry, "missing")
 
+    def test_selected_manual_provider_receives_explicit_selection_hook(self):
+        from cli.provider_selection import narrow_registry
+
+        class ManualDemoProvider(DemoProvider):
+            def __init__(self):
+                self.explicitly_selected = False
+
+            def mark_explicit_selection(self):
+                self.explicitly_selected = True
+
+        registry = CapabilityRegistry()
+        provider = ManualDemoProvider()
+        registry.register(provider)
+
+        selected = narrow_registry(registry, "demo")
+
+        assert selected.all() == [provider]
+        assert provider.explicitly_selected is True
+
 
 class TestProviderPinnedCommands:
     def test_ask_runs_demo_and_strips_option(self, capsys):

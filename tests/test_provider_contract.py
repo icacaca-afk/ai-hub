@@ -131,6 +131,14 @@ def test_openai_provider_contract():
     print("✅ test_openai_provider_contract passed")
 
 
+def test_nine_router_provider_contract():
+    """9Router Provider must satisfy the frozen Provider contract."""
+    from providers.nine_router.provider import NineRouterProvider
+
+    errors = check_contract(NineRouterProvider)
+    assert not errors, f"NineRouterProvider contract violations: {errors}"
+
+
 def test_web_ai_provider_contract():
     """Web AI Provider (BrowserBridge) 必须通过 Contract。"""
     from providers.web_ai.provider import WebAIProvider
@@ -193,6 +201,7 @@ def test_capability_metadata_consistency():
     from providers.qoder.provider import QoderProvider
     from providers.gemini.provider import GeminiCLIProvider
     from providers.openai_api.provider import OpenAIAPIProvider
+    from providers.nine_router.provider import NineRouterProvider
     from providers.web_ai.provider import WebAIProvider
     from providers.claude_cli.provider import ClaudeCLIProvider
 
@@ -201,6 +210,7 @@ def test_capability_metadata_consistency():
         QoderProvider,
         GeminiCLIProvider,
         OpenAIAPIProvider,
+        NineRouterProvider,
         WebAIProvider,
         ClaudeCLIProvider,
     ]
@@ -220,6 +230,7 @@ def run_all():
         test_qoder_provider_contract,
         test_gemini_provider_contract,
         test_openai_provider_contract,
+        test_nine_router_provider_contract,
         test_web_ai_provider_contract,
         test_marvis_provider_contract,
         test_claude_provider_contract,

@@ -54,6 +54,13 @@ def narrow_registry(registry, provider_name: str | None):
         suffix = f" Available providers: {available}." if available else ""
         raise ValueError(f"Unknown provider: {provider_name}.{suffix}")
 
+    # Manual-only Providers stay ineligible for automatic routing. The
+    # optional hook is invoked only after the user explicitly pins one via
+    # --provider, without adding a new field to the frozen Provider contract.
+    mark_explicit = getattr(provider, "mark_explicit_selection", None)
+    if callable(mark_explicit):
+        mark_explicit()
+
     selected = CapabilityRegistry()
     selected.register(provider)
     return selected

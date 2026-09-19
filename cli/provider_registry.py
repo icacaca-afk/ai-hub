@@ -27,6 +27,9 @@ def build_default_registry():
     from providers.openai_api.provider import OpenAIAPIProvider
     registry.register(OpenAIAPIProvider())
 
+    from providers.nine_router.provider import NineRouterProvider
+    registry.register(NineRouterProvider())
+
     from providers.qoder.provider import QoderProvider
     registry.register(QoderProvider())
 
