@@ -2,9 +2,10 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Implemented; external review pending |
+| Status | Accepted (V1.0.13 independent review, 2026-09-20) |
 | Date | 2026-08-17 |
 | Decider | User + external architecture review |
+| Review | [V1.0.13 Round 2 independent review](../reviews/v1.0.13-round2-independent-review.md) |
 | Supersedes | — |
 | Superseded by | — |
 | Related | ADR-0031 (Metadata Serialization), ADR-0032 (Pipeline Introspection), ADR-0033 (Predicate API) |

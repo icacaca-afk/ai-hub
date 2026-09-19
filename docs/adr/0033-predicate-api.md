@@ -2,9 +2,10 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Proposed |
+| Status | Accepted (V1.0.13 independent review, 2026-09-20) |
 | Date | 2026-08-13 |
 | Decider | User + ChatGPT (ADR Review) |
+| Review | [V1.0.13 Round 2 independent review](../reviews/v1.0.13-round2-independent-review.md) |
 | Supersedes | — |
 | Superseded by | — |
 | Related | ADR-0024 (ConditionStage), ADR-0031 (Metadata Serialization), ADR-0032 (Pipeline Introspection) |
